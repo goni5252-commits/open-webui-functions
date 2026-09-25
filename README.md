@@ -4,7 +4,7 @@ Open WebUI에서 사용할 수 있는 함수를 공유합니다.
 
 | 함수 | 편집 원본 | 배포 파일 |
 | --- | --- | --- |
-| OpenAI Responses | [Python](functions/openai_responses.py) | [v1.7.4 JSON](function-openai_responses-v1.7.4.json) |
+| OpenAI Responses | [Python](functions/openai_responses.py) | [v1.7.5 JSON](function-openai_responses-v1.7.5.json) |
 | Google Gemini | [Python](functions/google_gemini.py) | [JSON](function-google_gemini.json) |
 | Gemini RAG Bypass | [Python](functions/google_gemini_rag_bypass.py) | [JSON](function-google_gemini_rag_bypass.json) |
 
