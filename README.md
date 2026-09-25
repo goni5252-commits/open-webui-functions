@@ -2,15 +2,17 @@
 
 Open WebUI에서 사용할 수 있는 함수를 공유합니다.
 
-| 함수 | 편집 원본 | 기존 배포 파일 |
+| 함수 | 편집 원본 | 배포 파일 |
 | --- | --- | --- |
-| OpenAI Responses | [Python](functions/openai_responses.py) | [v1.6.8 JSON](function-openai_responses-v1.6.8.json) |
+| OpenAI Responses | [Python](functions/openai_responses.py) | [v1.7.4 JSON](function-openai_responses-v1.7.4.json) |
 | Google Gemini | [Python](functions/google_gemini.py) | [JSON](function-google_gemini.json) |
 | Gemini RAG Bypass | [Python](functions/google_gemini_rag_bypass.py) | [JSON](function-google_gemini_rag_bypass.json) |
 
 **[업데이트 내역 보기](CHANGELOG.md)** · [커밋 기록](https://github.com/goni5252-commits/open-webui-functions/commits/main/)
 
-기존 `function-openai_responses.json`은 1.5.4입니다. 연동 설정 시 기존 배포 파일을 유지했으므로 현재 Responses는 위의 1.6.8 링크를 사용하세요. 다음 Responses 게시부터 버전 없는 JSON도 해당 새 버전으로 갱신합니다.
+[최신 Responses JSON](function-openai_responses.json)도 v1.7.4입니다. OpenWebUI에서 JSON 파일을 가져오거나 Python 원본으로 기존 함수 코드를 교체할 수 있습니다. [이전 v1.6.8](function-openai_responses-v1.6.8.json)은 보관합니다.
+
+오프라인 회귀 테스트는 Python 3.11 이상과 Pydantic 2에서 `python3 -m unittest discover -s tests -v`로 실행합니다. OpenWebUI와 HTTP 호출은 모의 객체로 대체합니다.
 
 ## Codex에서 수정하고 공유하기
 
