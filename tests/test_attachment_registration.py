@@ -61,6 +61,6 @@ class RegistrationTests(unittest.IsolatedAsyncioTestCase):
             return out
         before,after=functions(json.loads(original.read_text())[0]["content"]),functions(new)
         changed={k for k,v in before.items() if after.get(k)!=v}
-        self.assertEqual(changed,{'Pipe.pipe','Pipe._pipe_impl'})
+        self.assertEqual(changed,{'Pipe.pipe','Pipe._pipe_impl','Pipe._run_streaming_loop'})
 
 if __name__=='__main__': unittest.main()

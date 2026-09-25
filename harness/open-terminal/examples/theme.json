@@ -1,0 +1,11 @@
+{
+  "source": {"name": "neutral-example", "adaptations": ["실제 DESIGN.md를 분석한 테마가 아닌 스키마 예시"]},
+  "colors": {"background": "F7F7F5", "surface": "FFFFFF", "text": "202020", "accent": "305EAF"},
+  "fonts": {"title": "Noto Sans CJK KR", "body": "Noto Sans CJK KR"},
+  "font_sizes_pt": {"title": 34, "body": 20},
+  "slide_size": {"width": 13.333, "height": 7.5},
+  "margins_inches": 0.6,
+  "card_style": {"rounded": true},
+  "image_style": "자료에 맞는 이미지가 요청된 경우에만 배치",
+  "adapter_defaults": ["16:9", "제목 34pt, 본문 20pt"]
+}

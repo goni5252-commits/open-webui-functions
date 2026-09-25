@@ -1,5 +1,14 @@
 # 업데이트 내역
 
+## 2026-09-25 — OpenAI Responses v1.7.7 / Terminal 하네스 1.0.0
+
+- 함수의 상세 PPT 제작 지침과 생성용 다운로드 명령을 제거하고, Terminal의 INDEX.md를 읽도록 안내하는 `get_terminal_harness`로 교체했습니다. 하네스 ZIP·SHA-256·Windows/WSL2 Compose 마운트 안내를 제공합니다.
+- 제작/디자인 참조/테마 변환 지침을 필요할 때만 읽습니다. 환경 진단, 격리 다운로드, 기본 편집형 PPTX 빌더, 구조·슬라이드 경계 검증 및 예제를 패키지에 포함했습니다. 별도 스킬 자동 등록이나 서버 자동 설치는 하지 않습니다.
+- `TERMINAL_HARNESS_ROOT=/opt/openwebui-harness` 및 `COMPACT_STATUS_UPDATES=True`를 추가했습니다. 활성화는 기존 `ENABLE_PRESENTATION_DESIGN`을 유지합니다.
+- 같은 API 요청의 response.created / response.in_progress가 동일 대기 문구를 두 번 출력하던 문제를 수정했습니다. 간결 모드는 도구 후속 요청에서도 대기를 반복하지 않고 긴 인자/결과 상태 표시를 줄입니다. 45초 무활동 알림은 같은 대기 구간에서 한 번만 표시합니다. 오류·파일 카드·실제 도구 결과는 유지하며 기존 저장 기록은 변경하지 않습니다.
+- 검증: 오프라인 테스트 70개 통과. 한글 텍스트가 있는 편집형 PPTX를 실제 로컬 생성하고 텍스트/슬라이드 수/경계 및 덮어쓰기 방지를 확인했습니다. 다운로드 실패·HTML·빈 결과·시간 초과, locator 등록/비활성화/충돌, lifecycle 중복·도구 후속 요청·상태 간결화를 검사했습니다. 배포 JSON·ZIP·SHA-256 일치 및 스킬 구조 검증을 수행했습니다.
+- 한계: getdesign 실네트워크 호출, 실제 OpenWebUI·WSL2 서버 설치, 슬라이드 렌더링/시각 품질은 검증하지 않았습니다. 디자인 해석과 Terminal 실행은 모델의 지침 준수에 의존합니다. PPTX에 글꼴은 자동 포함되지 않습니다.
+
 ## 2026-09-25 — OpenAI Responses v1.7.6
 
 - getdesign.md 또는 첨부 DESIGN.md를 활용한 PPT 제작용 `prepare_presentation_design` 도구와 지침을 추가했습니다. Terminal 연결 및 `ENABLE_PRESENTATION_DESIGN=True`에서만 등록되며 백그라운드 제목 생성에는 등록하지 않습니다.
