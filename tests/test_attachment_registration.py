@@ -61,6 +61,9 @@ class RegistrationTests(unittest.IsolatedAsyncioTestCase):
             return out
         before,after=functions(json.loads(original.read_text())[0]["content"]),functions(new)
         changed={k for k,v in before.items() if after.get(k)!=v}
-        self.assertEqual(changed,{'Pipe.pipe','Pipe._pipe_impl','Pipe._run_streaming_loop'})
+        # v1.7.10 intentionally updates OCR routing and the HWPX OCR hint.
+        self.assertEqual(changed,{'Pipe.pipe','Pipe._pipe_impl','Pipe._run_streaming_loop',
+            'Pipe._run_ocr_model','Pipe._validate_ocr_result','ModelFamily.is_ocr_model',
+            'Pipe._inject_native_hwpx_context'})
 
 if __name__=='__main__': unittest.main()

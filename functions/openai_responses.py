@@ -5,8 +5,13 @@ author: originally written by jrkropp, editted by woogon kim
 git_url: https://github.com/jrkropp/open-webui-developer-toolkit/blob/main/functions/pipes/openai_responses_manifold/openai_responses_manifold.py
 description: Brings OpenAI Response API support to Open WebUI, enabling features not possible via Completions API.
 required_open_webui_version: 0.11.0
-version: 1.7.9
+version: 1.7.10
 license: MIT
+Changelog (v1.7.10):
+- Upgrade dedicated OCR to GPT-6 Luna with GPT-6 Sol validation fallback.
+- Migrate saved OCR model lists and fallback settings; retain the old OCR alias for existing chats.
+- Preserve native PDF input, batching, RAG/tool isolation and cleanup.
+
 Changelog (v1.7.9):
 - Default to simple document guidance using the existing Terminal; no harness installation needed.
 - Keep the shared harness as an explicit advanced option.
@@ -651,7 +656,8 @@ class ModelFamily:
         "gpt-5.6-luna-auto":             {"base_model": "gpt-5.6-luna",  "params": {"_auto_reasoning": True}},
         # v1.5.1 dedicated OCR pseudo-model. The base is Luna; OCR-specific
         # behavior is handled by _run_ocr_model before normal tool/model routing.
-        "gpt-5.6-ocr":                   {"base_model": "gpt-5.6-luna",  "params": {"_ocr_mode": True}},
+        "gpt-6-ocr":                     {"base_model": "gpt-6-luna", "params": {"_ocr_mode": True}},
+        "gpt-5.6-ocr":                   {"base_model": "gpt-6-luna", "params": {"_ocr_mode": True}},  # Existing chats
         # v1.5.0 generic smart-auto alias. Terra is only a temporary placeholder
         # during request-body validation; _route_auto_model_and_reasoning() replaces
         # it with Luna, Terra or Sol before the real /responses request is built.
@@ -758,7 +764,7 @@ class ModelFamily:
         return value
     @classmethod
     def is_ocr_model(cls, model_id: str) -> bool:
-        """True for the dedicated gpt-5.6-ocr native-file OCR pseudo-model."""
+        """True for the dedicated gpt-6-ocr native-file OCR pseudo-model."""
         key = cls._norm(model_id)
         return bool(cls._ALIASES.get(key, {}).get("params", {}).get("_ocr_mode"))
     @classmethod
@@ -1191,7 +1197,7 @@ class Pipe:
         )
         # Models
         MODEL_ID: str = Field(
-            default="gpt-6-auto, gpt-6-sol, gpt-6-luna, gpt-6-sol-auto, gpt-6-luna-auto, gpt-6-astra-auto, gpt-6-astra, gpt-5.6-ocr, gpt-5.6-sol-auto, gpt-5.6-terra-auto, gpt-5.6-luna-auto, gpt-5.6-auto, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-5.4, gpt-5.4-thinking, gpt-5.4-mini, gpt-5.4-nano, gpt-5.3-chat-latest, gpt-5-mini, gpt-image-2.5-flare, gpt-image-2.5-sunburst, gpt-image-2",
+            default="gpt-6-auto, gpt-6-sol, gpt-6-luna, gpt-6-sol-auto, gpt-6-luna-auto, gpt-6-astra-auto, gpt-6-astra, gpt-6-ocr, gpt-5.6-sol-auto, gpt-5.6-terra-auto, gpt-5.6-luna-auto, gpt-5.6-auto, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-5.4, gpt-5.4-thinking, gpt-5.4-mini, gpt-5.4-nano, gpt-5.3-chat-latest, gpt-5-mini, gpt-image-2.5-flare, gpt-image-2.5-sunburst, gpt-image-2",
             description=(
                 "Comma separated OpenAI model IDs. Each ID becomes a model entry in WebUI. "
                 "Supports all official OpenAI model IDs and pseudo IDs.\n"
@@ -1208,8 +1214,8 @@ class Pipe:
                 "(or /images/edits if an image is attached). Quality and size are configurable "
                 "per-user via the chat-UI 밸브 button (v1.2.7+) and per-instance via the "
                 "IMAGE_QUALITY / IMAGE_SIZE Valves below.\n"
-                "OCR model: gpt-5.6-ocr uses Luna-first native image/file passthrough, RAG-message bypass, "
-                "PDF batching and Terra fallback. External tools/web search are disabled in OCR mode.\n"
+                "OCR model: gpt-6-ocr uses Luna-first native image/file passthrough, RAG-message bypass, "
+                "PDF batching and GPT-6 Sol fallback. External tools/web search are disabled in OCR mode.\n"
                 "Automatic models: gpt-6-auto chooses GPT-6 Luna/Sol/Astra with Sol as the default and Astra reserved for exceptional work; "
                 "gpt-6-sol-auto, gpt-6-luna-auto and gpt-6-astra-auto keep the selected model fixed and auto-select effort. gpt-5.6-auto remains "
                 "strictly Luna/Terra/Sol for backward-compatible cost control. gpt-5.6-sol-auto, "
@@ -1228,6 +1234,23 @@ class Pipe:
             default="disabled",
             description="REQUIRES VERIFIED OPENAI ORG. If verified, highly recommend using 'response' or 'conversation' for best results. If `disabled` (default) = never request encrypted reasoning tokens; if `response` = request tokens so the model can carry reasoning across tool calls for the current response; If `conversation` = also persist tokens for future messages in this chat (higher token usage; quality may vary).",
         )
+        @model_validator(mode="before")
+        @classmethod
+        def _migrate_ocr_settings(cls, values):
+            if not isinstance(values, dict):
+                return values
+            values = dict(values)
+            if isinstance(values.get("MODEL_ID"), str):
+                models = [m.strip() for m in values["MODEL_ID"].split(",") if m.strip()]
+                models = ["gpt-6-ocr" if ModelFamily._norm(m) == "gpt-5.6-ocr" else m for m in models]
+                values["MODEL_ID"] = ", ".join(dict.fromkeys(models))
+            if "OCR_SOL_FALLBACK" not in values and "OCR_TERRA_FALLBACK" in values:
+                values["OCR_SOL_FALLBACK"] = values["OCR_TERRA_FALLBACK"]
+            values.pop("OCR_TERRA_FALLBACK", None)
+            if values.get("OCR_FALLBACK_MODEL") in {"gpt-5.6-terra", "gpt-5.6-sol"}:
+                values["OCR_FALLBACK_MODEL"] = "gpt-6-sol"
+            return values
+
         # GPT-6 Astra / smart routing (v1.6.0)
         ENABLE_GPT6_ASTRA: bool = Field(
             default=True,
@@ -1444,7 +1467,7 @@ class Pipe:
         OCR_NATIVE_FILE_PASSTHROUGH: bool = Field(
             default=True,
             description=(
-                "For gpt-5.6-ocr, read Open WebUI's reserved __files__ entries and send the original "
+                "For gpt-6-ocr, read Open WebUI's reserved __files__ entries and send the original "
                 "file to OpenAI instead of relying on injected RAG text. Disable only for debugging."
             ),
         )
@@ -1472,15 +1495,15 @@ class Pipe:
             default="low",
             description="Reasoning effort for the Luna OCR first pass. OCR is usually vision/extraction rather than deep reasoning.",
         )
-        OCR_TERRA_FALLBACK: bool = Field(
+        OCR_SOL_FALLBACK: bool = Field(
             default=True,
             description=(
-                "Retry a batch with GPT-5.6 Terra when Luna returns an incomplete response or fails Markdown/integrity validation."
+                "Retry a batch with GPT-6 Sol when Luna returns an incomplete response or fails Markdown/integrity validation."
             ),
         )
-        OCR_FALLBACK_MODEL: Literal["gpt-5.6-terra", "gpt-5.6-sol"] = Field(
-            default="gpt-5.6-terra",
-            description="Fallback OCR model. Terra is recommended; Sol is available only for deliberate quality-first deployments.",
+        OCR_FALLBACK_MODEL: Literal["gpt-6-sol"] = Field(
+            default="gpt-6-sol",
+            description="GPT-6 Sol retries OCR batches that fail Luna output validation.",
         )
         OCR_FALLBACK_EFFORT: Literal["low", "medium", "high"] = Field(
             default="medium",
@@ -1496,7 +1519,7 @@ class Pipe:
             default=128000,
             ge=1024,
             le=128000,
-            description="Maximum output tokens requested for each OCR batch. GPT-5.6 supports up to 128K output tokens.",
+            description="Maximum output tokens requested for each OCR batch. Applied independently to each OCR batch.",
         )
         OCR_OPENAI_FILE_EXPIRES_SECONDS: int = Field(
             default=3600,
@@ -1517,7 +1540,7 @@ class Pipe:
         )
         OCR_REQUIRE_TABLE: bool = Field(
             default=True,
-            description="Require a Markdown table. Turn off only if you intentionally reuse gpt-5.6-ocr for plain-text extraction.",
+            description="Require a Markdown table. Turn off only if you intentionally reuse gpt-6-ocr for plain-text extraction.",
         )
         OCR_MAX_PREFACE_CHARS: int = Field(
             default=500,
@@ -2713,7 +2736,7 @@ class Pipe:
         require_table: bool,
         max_preface_chars: int,
     ) -> tuple[bool, str, dict[str, Any]]:
-        """Cheap deterministic OCR validation; failures trigger Terra retry, not hallucinated repair."""
+        """Cheap deterministic OCR validation; failures trigger Sol retry, not hallucinated repair."""
         if not text.strip():
             return False, "empty output", {}
         status = str(response_payload.get("status") or "").lower()
@@ -3307,7 +3330,7 @@ class Pipe:
             if stats.get("image_dominant"):
                 meta_line += (
                     "\n[HWPX 분석 참고: XML 본문보다 이미지 비중이 높은 문서입니다. 정확한 대량 OCR이 목적이면 "
-                    "PDF 또는 gpt-5.6-ocr 경로가 더 적합할 수 있습니다.]"
+                    "PDF 또는 gpt-6-ocr 경로가 더 적합할 수 있습니다.]"
                 )
             docs.append(f"# 첨부 HWPX {idx}: {rec.get('filename') or path.name}\n\n{meta_line}\n\n{parsed_text}")
 
@@ -3383,9 +3406,9 @@ class Pipe:
         files_arg: list[dict[str, Any]] | None,
     ) -> str:
         """
-        Dedicated gpt-5.6-ocr path:
+        Dedicated gpt-6-ocr path:
           Open WebUI original prompt + native image/file -> Luna/low -> deterministic validation
-          -> Terra/medium retry only for failed batches -> merged Markdown tables.
+          -> GPT-6 Sol/medium retry only for failed batches -> merged Markdown tables.
         Normal RAG text, web search, MCP and Open WebUI tools never enter this request path.
         """
         user_prompt = ""
@@ -3455,7 +3478,7 @@ class Pipe:
             work_units.append({"kind": "images", "blocks": image_blocks, "page_range": None, "source": "attached-images"})
         else:
             raise ValueError(
-                "gpt-5.6-ocr에서 원본 파일/이미지를 찾지 못했습니다. "
+                "gpt-6-ocr에서 원본 파일/이미지를 찾지 못했습니다. "
                 "Open WebUI 0.11의 첨부 파일을 현재 메시지에 연결했는지 확인하세요. "
                 "File Context를 꺼도 __files__가 Pipe에 전달되는 구성이어야 합니다."
             )
@@ -3469,7 +3492,7 @@ class Pipe:
                 label = f"pages {pr[0]}-{pr[1]}" if pr else f"item {idx}"
                 await event_emitter({
                     "type": "status",
-                    "data": {"description": f"OCR Luna pass {idx}/{total_units} ({label})…"},
+                    "data": {"description": f"OCR GPT-6 Luna pass {idx}/{total_units} ({label})…"},
                 })
 
             uploaded_id = ""
@@ -3491,7 +3514,7 @@ class Pipe:
                     media_blocks = list(unit.get("blocks") or [])
 
                 luna_payload, luna_text = await self._ocr_single_request(
-                    model="gpt-5.6-luna",
+                    model="gpt-6-luna",
                     effort=valves.OCR_REASONING_EFFORT,
                     instructions=instructions,
                     user_prompt=user_prompt,
@@ -3508,12 +3531,12 @@ class Pipe:
 
                 final_text = luna_text
                 final_parsed = parsed
-                if not valid and valves.OCR_TERRA_FALLBACK:
+                if not valid and valves.OCR_SOL_FALLBACK:
                     self.logger.warning("OCR Luna validation failed for unit %s: %s; retrying with %s", idx, reason, valves.OCR_FALLBACK_MODEL)
                     if event_emitter:
                         await event_emitter({
                             "type": "status",
-                            "data": {"description": f"OCR validation failed ({reason}); retrying this batch with Terra…"},
+                            "data": {"description": f"OCR validation failed ({reason}); retrying this batch with GPT-6 Sol…"},
                         })
                     fb_payload, fb_text = await self._ocr_single_request(
                         model=valves.OCR_FALLBACK_MODEL,

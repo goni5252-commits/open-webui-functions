@@ -10,11 +10,13 @@ OpenWebUI 대화에서 **학교 양식으로 HWPX를 작성하고, 디자인을 
 
 | 다운로드 | 용도 |
 |---|---|
-| [OpenAI Responses v1.7.9 JSON](function-openai_responses-v1.7.9.json) · [직접 다운로드](https://raw.githubusercontent.com/goni5252-commits/open-webui-functions/main/function-openai_responses-v1.7.9.json) | 이 안내에서 사용하는 함수 |
+| [OpenAI Responses v1.7.10 JSON](function-openai_responses-v1.7.10.json) · [직접 다운로드](https://raw.githubusercontent.com/goni5252-commits/open-webui-functions/main/function-openai_responses-v1.7.10.json) | 이 안내에서 사용하는 함수 |
 | [Google Gemini v1.23.6 JSON](function-google_gemini.json) | 별도 Gemini 함수 |
 | [Gemini RAG Bypass JSON](function-google_gemini_rag_bypass.json) | 별도 RAG Bypass 함수 |
 
 [변경 내역](CHANGELOG.md) · [OpenAI 함수 Python 원본](functions/openai_responses.py)
+
+스캔 PDF 전사는 모델 목록에서 **`gpt-6-ocr`**를 선택하세요. GPT-6 Luna(`low`)로 먼저 읽고, 출력 검사에 실패한 묶음만 GPT-6 Sol(`medium`)로 재시도합니다. 원본 PDF 전송·RAG 우회·기본 10페이지 분할을 사용합니다. 기존 `gpt-5.6-ocr` 대화도 새 경로로 연결되며, 저장된 모델 목록과 이전 OCR fallback 설정은 자동 이전됩니다. 재시도를 끈 설정은 유지됩니다. 새 설정 이름은 `OCR_SOL_FALLBACK`입니다.
 
 ## 1. 어떤 환경을 기준으로 하나요?
 
@@ -139,7 +141,7 @@ docker compose logs --tail 80 open-terminal
 
 ## 3. OpenWebUI에 함수 적용하기
 
-1. 위의 **OpenAI Responses v1.7.9 JSON**을 저장합니다. GitHub의 Raw/다운로드를 사용하고 웹페이지 HTML을 저장하지 마세요.
+1. 위의 **OpenAI Responses v1.7.10 JSON**을 저장합니다. GitHub의 Raw/다운로드를 사용하고 웹페이지 HTML을 저장하지 마세요.
 2. OpenWebUI의 **워크스페이스 → 함수**에서 가져오기 기능으로 JSON을 불러옵니다. 메뉴 명칭은 버전에 따라 조금 다를 수 있습니다.
 3. 함수를 활성화하고 Valve 설정에서 자신의 OpenAI API 키를 입력합니다. 이미 사용 중이면 기존 API 설정을 확인합니다.
 4. 아래 설정은 기본값을 유지하면 됩니다.

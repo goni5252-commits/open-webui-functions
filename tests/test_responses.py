@@ -168,7 +168,7 @@ class RoutingTests(unittest.IsolatedAsyncioTestCase):
     async def test_model_listing_with_saved_model_list_and_disabled_astra(self):
         self.pipe.valves = m.Pipe.Valves(MODEL_ID="gpt-6-auto,gpt-6-astra,gpt-6-astra-auto,gpt-5.6-ocr", ENABLE_GPT6_ASTRA=False)
         ids = [item["id"] for item in await self.pipe.pipes()]
-        for model in ("gpt-6-auto", "gpt-6-sol", "gpt-6-luna", "gpt-6-sol-auto", "gpt-6-luna-auto", "gpt-5.6-ocr"):
+        for model in ("gpt-6-auto", "gpt-6-sol", "gpt-6-luna", "gpt-6-sol-auto", "gpt-6-luna-auto", "gpt-6-ocr"):
             self.assertIn(model, ids)
         self.assertNotIn("gpt-6-astra", ids)
         self.assertNotIn("gpt-6-astra-auto", ids)
@@ -200,8 +200,8 @@ class ConfigurationTests(unittest.TestCase):
                 self.assertNotIn("_auto_reasoning", body.model_dump())
                 self.assertTrue(m.ModelFamily.supports("function_calling", model))
                 self.assertEqual(m.ModelFamily.normalize_reasoning_effort(model, "minimal"), "low")
-        self.assertEqual(m.ModelFamily.base_model("gpt-5.6-ocr"), "gpt-5.6-luna")
-        self.assertEqual(m.Pipe.Valves().OCR_FALLBACK_MODEL, "gpt-5.6-terra")
+        self.assertEqual(m.ModelFamily.base_model("gpt-5.6-ocr"), "gpt-6-luna")
+        self.assertEqual(m.Pipe.Valves().OCR_FALLBACK_MODEL, "gpt-6-sol")
 
     def test_gpt6_sampling_compatibility_and_no_mutation(self):
         for model in ("gpt-6-luna", "gpt-6-sol", "gpt-6-astra"):
