@@ -11,6 +11,7 @@ OpenWebUI 대화에서 **학교 양식으로 HWPX를 작성하고, 디자인을 
 | 다운로드 | 용도 |
 |---|---|
 | [OpenAI Responses v1.7.10 JSON](function-openai_responses-v1.7.10.json) · [직접 다운로드](https://raw.githubusercontent.com/goni5252-commits/open-webui-functions/main/function-openai_responses-v1.7.10.json) | 이 안내에서 사용하는 함수 |
+| [한글 내보내기 v3.4.0 JSON](function-한글문서_내보내기-v3.4.0.json) | 기존 답변을 HWPX로 저장하는 Action (Open WebUI 0.11.4+) |
 | [Google Gemini v1.23.6 JSON](function-google_gemini.json) | 별도 Gemini 함수 |
 | [Gemini RAG Bypass JSON](function-google_gemini_rag_bypass.json) | 별도 RAG Bypass 함수 |
 
@@ -241,3 +242,18 @@ WSL2 메모리 조절이 필요하면 Windows의 `%UserProfile%\.wslconfig`에�
 [고급 설치](harness/open-terminal/INSTALL.md) · [기존 지침 이전](harness/open-terminal/MIGRATION.md) · [기능 확장](harness/open-terminal/EXTENDING.md)
 
 이 저장소의 함수는 모델이 도구를 사용하는 방법을 안내하고 연결합니다. 실제 작업은 모델·Terminal·설치된 프로그램이 수행하며, 모든 문서의 결과 품질을 자동 보장하지는 않습니다.
+
+## 한글 내보내기 Action v3.4.0
+
+기존 답변을 HWPX로 저장하는 독립 함수입니다. Open Terminal 연결은 필요하지 않습니다. Open WebUI **0.11.4 이상**을 대상으로 하며 실제 설치 버전은 관리자 화면에서 확인하세요. 구버전이라면 이 파일을 바로 덮어쓰지 마세요.
+
+1. 기존 한글 내보내기 함수와 설정을 먼저 내보내 백업합니다.
+2. 위 v3.4.0 JSON을 다운로드해 관리자 **함수(Functions)** 화면에서 가져옵니다. 기존 함수 ID `한글문서_내보내기`를 유지하므로 중복 ID 안내가 나오면 기존 함수 편집 화면에 [Python 원본](functions/한글문서_내보내기.py)을 적용할 수 있습니다.
+3. 함수를 활성화하고 대상 모델에서 Action을 사용하도록 설정합니다. 배포 JSON의 활성화·전역 적용 값은 기본적으로 꺼져 있습니다.
+4. 한글 본문·표·첨부 이미지가 있는 답변에서 실행해 `.hwpx`를 내려받고 한글에서 열어 확인합니다.
+
+기본 범위는 마지막 AI 답변이며 `export_mode=full_conversation`으로 전달된 대화 범위를 저장합니다. 사용자별 Thinking/표/이미지/범위 설정을 지원합니다. `lxml` 의존성이 필요합니다. 외부 URL 이미지는 다운로드하지 않으며, 내부 파일은 소유권·공유 읽기 권한을 검사합니다. 권한·크기·형식 문제로 제외된 이미지는 경고로 안내합니다.
+
+브라우저 연결이 끊기거나 다운로드 확인이 실패하면 오류를 표시합니다. 서버에 사용자에게 보이지 않는 파일만 저장하고 성공으로 처리하지 않습니다. “다운로드 시작”은 브라우저 실행 응답을 확인했다는 의미이며 OS의 최종 파일 저장까지 보장하지 않습니다. 기본 제한은 본문 100만 자, 이미지당 20MB, 이미지 합계 40MB, 결과 48MB, 브라우저 응답 60초입니다. 서버 WebSocket 제한에 따라 큰 파일은 더 작은 범위로 내보내야 할 수 있습니다.
+
+오프라인 검증 명령: `python3 -m unittest discover -s tests -p test_hwpx_export.py` (lxml, Pydantic 2 필요; 다운로드 JavaScript 검사에는 PATH의 Node 필요). 실제 한컴 한글 페이지 배치는 별도 확인이 필요합니다.

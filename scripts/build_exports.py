@@ -8,7 +8,7 @@ import re
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
-IDS = ('openai_responses', 'google_gemini', 'google_gemini_rag_bypass')
+IDS = ('openai_responses', 'google_gemini', 'google_gemini_rag_bypass', '한글문서_내보내기')
 
 
 def header(code):
