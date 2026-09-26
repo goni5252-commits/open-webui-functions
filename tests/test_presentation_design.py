@@ -20,6 +20,7 @@ class HarnessLocatorTests(unittest.IsolatedAsyncioTestCase):
     async def test_registration_gates_and_schema(self):
         for terminal, enabled, task in ((True, True, None), (False, True, None), (True, False, None), (True, True, {'type':'title'})):
             pipe = m.Pipe()
+            pipe.valves.DOCUMENT_WORKFLOW_MODE = "harness"
             pipe.valves.ENABLE_TERMINAL_HARNESS = enabled
             pipe._pipe_impl = AsyncMock(return_value='ok')
             registry = {'run_command': {'type': 'terminal', 'tool_id': 'terminal:one'}} if terminal else {}
@@ -41,6 +42,7 @@ class HarnessLocatorTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_name_collision_reports_error(self):
         pipe = m.Pipe()
+        pipe.valves.DOCUMENT_WORKFLOW_MODE = "harness"
         pipe._pipe_impl = AsyncMock()
         result = await pipe.pipe({'messages': []}, {}, None, AsyncMock(), None, {}, {
             'run_command': {'type':'terminal'}, 'get_terminal_harness': {}}, [])
