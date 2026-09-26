@@ -11,6 +11,7 @@ OpenWebUI 대화에서 **학교 양식으로 HWPX를 작성하고, 디자인을 
 | 다운로드 | 용도 |
 |---|---|
 | [OpenAI Responses v1.7.10 JSON](function-openai_responses-v1.7.10.json) · [직접 다운로드](https://raw.githubusercontent.com/goni5252-commits/open-webui-functions/main/function-openai_responses-v1.7.10.json) | 이 안내에서 사용하는 함수 |
+| [엑셀 내보내기 v0.4.0 JSON](function-엑셀로_내보내기-v0.4.0.json) | 답변의 Markdown 표를 XLSX로 저장하는 Action (Open WebUI 0.11.4+) |
 | [한글 내보내기 v3.4.0 JSON](function-한글문서_내보내기-v3.4.0.json) | 기존 답변을 HWPX로 저장하는 Action (Open WebUI 0.11.4+) |
 | [Google Gemini v1.23.6 JSON](function-google_gemini.json) | 별도 Gemini 함수 |
 | [Gemini RAG Bypass JSON](function-google_gemini_rag_bypass.json) | 별도 RAG Bypass 함수 |
@@ -257,3 +258,17 @@ WSL2 메모리 조절이 필요하면 Windows의 `%UserProfile%\.wslconfig`에�
 브라우저 연결이 끊기거나 다운로드 확인이 실패하면 오류를 표시합니다. 서버에 사용자에게 보이지 않는 파일만 저장하고 성공으로 처리하지 않습니다. “다운로드 시작”은 브라우저 실행 응답을 확인했다는 의미이며 OS의 최종 파일 저장까지 보장하지 않습니다. 기본 제한은 본문 100만 자, 이미지당 20MB, 이미지 합계 40MB, 결과 48MB, 브라우저 응답 60초입니다. 서버 WebSocket 제한에 따라 큰 파일은 더 작은 범위로 내보내야 할 수 있습니다.
 
 오프라인 검증 명령: `python3 -m unittest discover -s tests -p test_hwpx_export.py` (lxml, Pydantic 2 필요; 다운로드 JavaScript 검사에는 PATH의 Node 필요). 실제 한컴 한글 페이지 배치는 별도 확인이 필요합니다.
+
+## 엑셀 내보내기 Action v0.4.0
+
+Open WebUI **0.11.4 이상**을 대상으로 합니다. 기존 함수와 설정을 백업한 뒤 [설치용 JSON](function-엑셀로_내보내기-v0.4.0.json)을 관리자 함수 화면에서 가져와 활성화하고 대상 모델에 연결하세요. ID `엑셀로_내보내기`는 유지합니다. 중복 ID가 있으면 기존 함수 편집 화면에 [Python 원본](functions/엑셀로_내보내기.py)을 적용할 수 있습니다. 배포 JSON의 활성화·전역 적용 기본값은 꺼져 있습니다. pandas와 xlsxwriter가 필요하며 Open Terminal은 필요하지 않습니다.
+
+- `EXPORT_SCOPE=last_message`: 클릭한 메시지를 우선합니다. `all_messages`는 요청에 전달된 현재 대화 분기의 모든 표를 처리합니다.
+- `NUMBER_MODE=text`(기본): 식별번호의 앞자리 0, 긴 숫자, 날짜 문자열을 텍스트로 보존합니다. Excel 계산용 숫자가 필요하면 `safe_numbers`를 선택하세요. 이 옵션도 선행 0·15자리 초과 숫자·지수 표기·날짜를 자동 변환하지 않습니다. 수식 모양 문자열은 수식으로 실행하지 않습니다.
+- `TITLE_SOURCE`: 기존 대화 제목/Markdown 제목/AI 생성 선택을 유지합니다. AI 제목 생성 실패·30초 초과 시 기본 제목으로 진행합니다.
+- 기존 `ROW_HEIGHT`/`COLUMN_WIDTH` 서식 설정을 유지합니다. Markdown 강조/코드 표시의 단순 서식 변환도 유지합니다.
+- 기본 제한은 입력 200만 자, 10만 셀, 100개 시트, 결과 24MB, 브라우저 응답 60초입니다. 셀 하나가 Excel 제한인 32,767자를 넘으면 오류로 안내합니다.
+
+구분선이 있는 파이프 Markdown 표를 지원합니다. HTML 표·병합 셀·중첩 표는 지원하지 않습니다. 빈 헤더는 ColN으로 채우고 추가 열도 보존합니다. 다운로드 성공 문구는 브라우저의 실행 응답까지 확인한 상태이며 OS의 최종 저장 완료를 보장하지 않습니다. 서버 WebSocket 제한으로 큰 파일이 실패하면 범위를 줄여 다시 실행하세요.
+
+검증: `python3 -m unittest discover -s tests -p test_excel_export.py` (pandas, xlsxwriter, openpyxl, Pydantic 2 필요; JavaScript 검사에는 PATH의 Node 필요). 실제 Excel에서의 표시·인쇄는 별도 확인이 필요합니다.
