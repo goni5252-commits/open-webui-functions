@@ -1,10 +1,13 @@
 """
 title: Google Gemini Pipeline
 author: owndev and olivier-lacroix. editied by goni5252
-version: 1.20.3
+author_url: https://github.com/owndev/
+project_url: https://github.com/owndev/Open-WebUI-Functions
+funding_url: https://github.com/sponsors/owndev
+version: 1.23.6
 required_open_webui_version: 0.9.0
 license: Apache License 2.0
-description: Google Gemini pipeline with Gemini 3.7 support, automatic Google Search grounding, empty-response protection, and robust built-in + function tool context circulation.
+description: Google Gemini pipeline with Gemini 3.7 support, local Auto Thinking routing, automatic Google Search grounding, Nano Banana 2 image routing/editing, OCR, RAG bypass, and robust tool handling.
 features:
   - Optimized asynchronous API calls for maximum performance
   - Intelligent model caching with configurable TTL
@@ -28,6 +31,7 @@ features:
   - Empty-stream guard to prevent silent blank assistant messages
   - Vertex AI Search grounding for RAG
   - Bypass backend RAG: send attached documents natively to Gemini instead of Open WebUI's RAG context (inspired by Gemini Manifold google_genai)
+  - Korean HWPX document support: direct ZIP/XML text extraction + embedded-image extraction
   - Native tool calling support with automatic signature management
   - URL context grounding for specified web pages
   - Unified image processing with consolidated helper methods
@@ -35,6 +39,8 @@ features:
   - Configurable image processing parameters (size, quality, compression)
   - Flexible upload fallback options and optimization controls
   - Configurable thinking levels for Gemini 3 models, including modern Flash levels
+  - Local Auto Thinking Router: selects low/medium/high by request complexity without an extra API call
+  - Auto Thinking respects explicit per-chat reasoning_effort and excludes OCR/image/video/background tasks
   - Configurable thinking budgets (0-32768 tokens) for Gemini 2.5 models
   - Configurable image generation aspect ratio (1:1, 16:9, etc.) and resolution (1K, 2K, 4K)
   - Model whitelist for filtering available models
@@ -48,6 +54,12 @@ features:
 """
 
 import os
+import copy
+import inspect
+import json
+from collections.abc import Mapping
+import contextlib
+from contextvars import ContextVar
 import re
 import time
 import asyncio
@@ -56,6 +68,9 @@ import hashlib
 import logging
 import io
 import uuid
+import zipfile
+import xml.etree.ElementTree as ET
+from pathlib import Path
 import aiofiles
 from PIL import Image
 from google import genai
@@ -168,15 +183,19 @@ class EncryptedStr(str):
 
         key = cls._get_encryption_key()
         if not key:  # No decryption if no key
-            return value[len("encrypted:") :]  # Return without prefix
+            raise ValueError(
+                "Cannot decrypt GOOGLE_API_KEY: WEBUI_SECRET_KEY is missing. Re-enter the API key."
+            )
 
         try:
             encrypted_part = value[len("encrypted:") :]
             f = Fernet(key)
             decrypted = f.decrypt(encrypted_part.encode())
             return decrypted.decode()
-        except (InvalidToken, Exception):
-            return value
+        except InvalidToken as exc:
+            raise ValueError(
+                "Cannot decrypt GOOGLE_API_KEY: secret key changed or ciphertext is invalid. Re-enter the API key."
+            ) from exc
 
     # Pydantic integration
     @classmethod
@@ -205,6 +224,14 @@ class Pipe:
     """
     Pipeline for interacting with Google Gemini models.
     """
+
+    @property
+    def user(self):
+        return self._request_user.get()
+
+    @user.setter
+    def user(self, value):
+        self._request_user.set(value)
 
     # User-overridable configuration valves
     class UserValves(BaseModel):
@@ -271,6 +298,138 @@ class Pipe:
                 "Gemini decides whether a search is needed for each request."
             ),
         )
+        AUTO_THINKING: bool = Field(
+            default=os.getenv("GOOGLE_AUTO_THINKING", "true").lower() == "true",
+            description=(
+                "Automatically choose Gemini thinking_level from the current request "
+                "using local heuristics only (no extra router API call). Explicit "
+                "per-chat reasoning_effort always wins."
+            ),
+        )
+        AUTO_THINKING_DEFAULT_LEVEL: str = Field(
+            default=os.getenv("GOOGLE_AUTO_THINKING_DEFAULT_LEVEL", "low"),
+            description=(
+                "Baseline level for ordinary text requests before complexity signals "
+                "raise it. The value is normalized to the levels supported by the "
+                "selected Gemini model."
+            ),
+            json_schema_extra={"enum": ["minimal", "low", "medium", "high"]},
+        )
+        AUTO_THINKING_LONG_CONTEXT_LEVEL: str = Field(
+            default=os.getenv("GOOGLE_AUTO_THINKING_LONG_CONTEXT_LEVEL", "medium"),
+            description=(
+                "Target level for long prompts, document analysis, or multi-attachment "
+                "requests. Normalized to the selected model's supported levels."
+            ),
+            json_schema_extra={"enum": ["minimal", "low", "medium", "high"]},
+        )
+        AUTO_THINKING_COMPLEX_LEVEL: str = Field(
+            default=os.getenv("GOOGLE_AUTO_THINKING_COMPLEX_LEVEL", "high"),
+            description=(
+                "Target level for hard math, proofs, complex debugging, architecture, "
+                "multi-step reasoning, and similarly difficult tasks."
+            ),
+            json_schema_extra={"enum": ["minimal", "low", "medium", "high"]},
+        )
+        AUTO_THINKING_LONG_TEXT_CHARS: int = Field(
+            default=int(os.getenv("GOOGLE_AUTO_THINKING_LONG_TEXT_CHARS", "8000")),
+            ge=1000,
+            le=200000,
+            description=(
+                "Latest-user-text length that promotes an otherwise ordinary request "
+                "to the long-context thinking level."
+            ),
+        )
+        AUTO_THINKING_VERY_LONG_TEXT_CHARS: int = Field(
+            default=int(
+                os.getenv("GOOGLE_AUTO_THINKING_VERY_LONG_TEXT_CHARS", "30000")
+            ),
+            ge=5000,
+            le=1000000,
+            description=(
+                "Latest-user-text length that can promote a request to the complex "
+                "thinking level."
+            ),
+        )
+        AUTO_THINKING_MULTIFILE_THRESHOLD: int = Field(
+            default=int(os.getenv("GOOGLE_AUTO_THINKING_MULTIFILE_THRESHOLD", "2")),
+            ge=1,
+            le=20,
+            description=(
+                "Number of attached files that promotes the request to at least the "
+                "long-context thinking level."
+            ),
+        )
+        AUTO_THINKING_SHOW_STATUS: bool = Field(
+            default=os.getenv("GOOGLE_AUTO_THINKING_SHOW_STATUS", "false").lower()
+            == "true",
+            description=(
+                "Show a brief Open WebUI status event with the automatically selected "
+                "thinking level. Disabled by default; the decision is always logged."
+            ),
+        )
+        LIVE_PROGRESS_STATUS: bool = Field(
+            default=os.getenv("GOOGLE_LIVE_PROGRESS_STATUS", "true").lower() == "true",
+            description=(
+                "Show short operational progress messages in Open WebUI before Gemini's "
+                "first answer token arrives (request analysis, document reading, web-search "
+                "preparation, tool preparation, and answer generation)."
+            ),
+        )
+        LIVE_PROGRESS_SHOW_THINKING_LEVEL: bool = Field(
+            default=os.getenv(
+                "GOOGLE_LIVE_PROGRESS_SHOW_THINKING_LEVEL", "true"
+            ).lower()
+            == "true",
+            description=(
+                "Include the selected Gemini thinking level in the compact progress status. "
+                "This exposes only the configured level, never hidden chain-of-thought."
+            ),
+        )
+        LIVE_PROGRESS_TIMELINE: bool = Field(
+            default=os.getenv("GOOGLE_LIVE_PROGRESS_TIMELINE", "true").lower()
+            == "true",
+            description=(
+                "While waiting for Gemini's first visible token, rotate through short "
+                "GPT-like progress messages. These are operational waiting indicators, "
+                "not a disclosure of hidden chain-of-thought."
+            ),
+        )
+        LIVE_PROGRESS_FINAL_TIMING: bool = Field(
+            default=os.getenv("GOOGLE_LIVE_PROGRESS_FINAL_TIMING", "true").lower()
+            == "true",
+            description=(
+                "Keep a final status such as 'Thought for 5.8 seconds · low' after "
+                "generation finishes."
+            ),
+        )
+        LIVE_PROGRESS_FIRST_TOKEN_TIMING: bool = Field(
+            default=os.getenv("GOOGLE_LIVE_PROGRESS_FIRST_TOKEN_TIMING", "true").lower()
+            == "true",
+            description=(
+                "Include time-to-first-visible-token in the final timing status when streaming."
+            ),
+        )
+        PROVIDER_THOUGHT_SUMMARY_IN_RESPONSE: bool = Field(
+            default=os.getenv(
+                "GOOGLE_PROVIDER_THOUGHT_SUMMARY_IN_RESPONSE", "true"
+            ).lower()
+            == "true",
+            description=(
+                "If Gemini explicitly returns provider thought-summary parts, preserve them "
+                "inside a collapsed <details> block. The function never invents a reasoning "
+                "summary when the API returns none."
+            ),
+        )
+        PROVIDER_THOUGHT_SUMMARY_MAX_CHARS: int = Field(
+            default=int(os.getenv("GOOGLE_PROVIDER_THOUGHT_SUMMARY_MAX_CHARS", "2500")),
+            ge=200,
+            le=20000,
+            description=(
+                "Maximum characters of provider-returned Gemini thought summary shown "
+                "inside the collapsed response details block."
+            ),
+        )
         AUTO_IMAGE_ROUTING: bool = Field(
             default=os.getenv("GOOGLE_AUTO_IMAGE_ROUTING", "true").lower() == "true",
             description=(
@@ -283,8 +442,7 @@ class Pipe:
             == "true",
             description=(
                 "Always expose Nano Banana 2 in Open WebUI's model picker, even when "
-                "models.list() is stale, MODEL_ADDITIONAL was persisted from an older "
-                "function version, MODEL_WHITELIST omits it, or the model cache has not refreshed."
+                "models.list() is stale. Uses AUTO_IMAGE_MODEL and respects MODEL_WHITELIST."
             ),
         )
         AUTO_IMAGE_MODEL: str = Field(
@@ -357,21 +515,21 @@ class Pipe:
             ),
         )
         OCR_VIRTUAL_MODEL_ID: str = Field(
-            default=os.getenv("GOOGLE_OCR_VIRTUAL_MODEL_ID", "gemini-3.7-flash-ocr"),
+            default=os.getenv("GOOGLE_OCR_VIRTUAL_MODEL_ID", "gemini-3.8-flash-ocr"),
             description="Virtual model ID shown to Open WebUI for OCR-optimized use.",
         )
         OCR_VIRTUAL_MODEL_NAME: str = Field(
             default=os.getenv(
                 "GOOGLE_OCR_VIRTUAL_MODEL_NAME",
-                "Gemini 3.7 Flash OCR (Korean High-Res)",
+                "Gemini 3.8 Flash OCR (Korean High-Res)",
             ),
             description="Display name for the virtual OCR model.",
         )
         OCR_BASE_MODEL_ID: str = Field(
-            default=os.getenv("GOOGLE_OCR_BASE_MODEL_ID", "gemini-3.7-flash"),
+            default=os.getenv("GOOGLE_OCR_BASE_MODEL_ID", "gemini-3.8-flash"),
             description=(
                 "Real Gemini API model used behind the virtual OCR model. "
-                "Defaults to gemini-3.7-flash."
+                "Defaults to gemini-3.8-flash; the previous 3.7 OCR base is migrated to 3.8."
             ),
         )
         OCR_MEDIA_RESOLUTION: str = Field(
@@ -385,10 +543,11 @@ class Pipe:
         OCR_THINKING_LEVEL: str = Field(
             default=os.getenv("GOOGLE_OCR_THINKING_LEVEL", "low"),
             description=(
-                "Thinking level used by the OCR virtual model. OCR usually benefits "
-                "more from visual fidelity than deep reasoning."
+                "Thinking level used by the OCR virtual model. Default low is valid "
+                "for Gemini 3.7 Flash and usually preferable because OCR benefits more "
+                "from visual fidelity than deeper reasoning."
             ),
-            json_schema_extra={"enum": ["minimal", "low", "medium", "high"]},
+            json_schema_extra={"enum": ["low", "medium", "high"]},
         )
         OCR_INCLUDE_THOUGHTS: bool = Field(
             default=os.getenv("GOOGLE_OCR_INCLUDE_THOUGHTS", "false").lower() == "true",
@@ -441,9 +600,13 @@ class Pipe:
         )
         THINKING_LEVEL: str = Field(
             default=os.getenv("GOOGLE_THINKING_LEVEL", ""),
-            description="Thinking level for Gemini 3 models. Modern Flash models (3.5/3.6/3.7+) "
-            "accept minimal/low/medium/high; some Pro and image variants support narrower sets. "
-            "Ignored for other models. Empty string means use the model default.",
+            description=(
+                "Manual fallback thinking level for Gemini 3 models. Gemini 3.7+ Flash "
+                "supports low/medium/high (minimal is not supported); Gemini 3.5/3.6 "
+                "Flash support minimal/low/medium/high. Some Pro/image variants expose "
+                "narrower sets. Empty string means use the model default when Auto "
+                "Thinking does not apply."
+            ),
         )
         USE_VERTEX_AI: bool = Field(
             default=os.getenv("GOOGLE_GENAI_USE_VERTEXAI", "false").lower() == "true",
@@ -480,6 +643,53 @@ class Pipe:
                 "When BYPASS_BACKEND_RAG is enabled, files up to this size (MB) are sent "
                 "inline. Larger files are uploaded via the Google Files API (not available "
                 "on Vertex AI; falls back to the backend-extracted text in that case)."
+            ),
+        )
+        ENABLE_HWPX_SUPPORT: bool = Field(
+            default=os.getenv("GOOGLE_ENABLE_HWPX_SUPPORT", "true").lower() == "true",
+            description=(
+                "Enable direct .hwpx handling before generic RAG-bypass fallback. "
+                "HWPX is parsed directly with Python's standard library. Binary .hwp "
+                "is intentionally outside this function's special handling."
+            ),
+        )
+        HWPX_MAX_TEXT_CHARS: int = Field(
+            default=int(os.getenv("GOOGLE_HWPX_MAX_TEXT_CHARS", "1500000")),
+            ge=10000,
+            le=5000000,
+            description=(
+                "Maximum extracted HWPX text characters attached to one Gemini request. "
+                "The text is truncated only when this safety ceiling is exceeded."
+            ),
+        )
+        HWPX_INCLUDE_EMBEDDED_IMAGES: bool = Field(
+            default=os.getenv("GOOGLE_HWPX_INCLUDE_EMBEDDED_IMAGES", "true").lower()
+            == "true",
+            description=(
+                "Attach supported images stored inside HWPX BinData to Gemini in addition "
+                "to extracted document text. Useful for image-heavy Korean documents."
+            ),
+        )
+        HWPX_MAX_EMBEDDED_IMAGES: int = Field(
+            default=int(os.getenv("GOOGLE_HWPX_MAX_EMBEDDED_IMAGES", "12")),
+            ge=0,
+            le=50,
+            description="Maximum number of HWPX embedded images sent with one document.",
+        )
+        HWPX_MAX_IMAGE_MB: int = Field(
+            default=int(os.getenv("GOOGLE_HWPX_MAX_IMAGE_MB", "8")),
+            ge=1,
+            le=20,
+            description=(
+                "Maximum size in MB for each HWPX embedded image sent inline to Gemini."
+            ),
+        )
+        HWPX_INCLUDE_PREVIEW_IF_EMPTY: bool = Field(
+            default=os.getenv("GOOGLE_HWPX_INCLUDE_PREVIEW_IF_EMPTY", "true").lower()
+            == "true",
+            description=(
+                "If an HWPX contains little/no extractable text and no BinData image, "
+                "send Preview/PrvImage.png as a visual fallback when available."
             ),
         )
         USE_PERMISSIVE_SAFETY: bool = Field(
@@ -766,7 +976,8 @@ class Pipe:
             reasons = stat.get("reasons") if stat else None
             if reasons:
                 desc += " | " + ", ".join(reasons[:3])
-            await __event_emitter__(
+            await self._emit_optional(
+                __event_emitter__,
                 {
                     "type": "status",
                     "data": {
@@ -776,9 +987,10 @@ class Pipe:
                         "done": False,
                         "details": stat_copy,
                     },
-                }
+                },
             )
-        await __event_emitter__(
+        await self._emit_optional(
+            __event_emitter__,
             {
                 "type": "status",
                 "data": {
@@ -786,7 +998,7 @@ class Pipe:
                     "description": f"{len(ordered_stats)} image(s) processed (limit {total_limit}).",
                     "done": True,
                 },
-            }
+            },
         )
 
     async def _build_image_generation_contents(
@@ -957,7 +1169,8 @@ class Pipe:
                 }
                 for i in range(len(combined))
             ]
-            await __event_emitter__(
+            await self._emit_optional(
+                __event_emitter__,
                 {
                     "type": "status",
                     "data": {
@@ -966,7 +1179,7 @@ class Pipe:
                         "images": mapping,
                         "done": True,
                     },
-                }
+                },
             )
 
         # Build parts
@@ -1015,6 +1228,7 @@ class Pipe:
     def __init__(self):
         """Initializes the Pipe instance and configures the genai library."""
         self.valves = self.Valves()
+        self._request_user = ContextVar("gemini_request_user", default=None)
         self.name: str = "Google Gemini: "
 
         # Setup logging
@@ -1054,7 +1268,11 @@ class Pipe:
                         return ""
                     # Convert to string and remove all control characters
                     sanitized = re.sub(r"[\x00-\x1F\x7F]", "", str(value))
-                    sanitized = sanitized.strip()
+                    sanitized = (
+                        sanitized.strip()
+                        .encode("ascii", errors="replace")
+                        .decode("ascii")
+                    )
                     return (
                         sanitized[:max_length]
                         if len(sanitized) > max_length
@@ -1173,7 +1391,10 @@ class Pipe:
         try:
             client = self._get_client()
             self.log.debug("Fetching models from Google API")
-            models = list(client.models.list())
+            try:
+                models = list(client.models.list())
+            finally:
+                client.close()
 
             # Process additional models (models not returned by SDK but that we want to add)
             additional = self.valves.MODEL_ADDITIONAL
@@ -1234,11 +1455,15 @@ class Pipe:
             # Add an Open WebUI-only virtual OCR model. It is never sent to the
             # Google API directly; _prepare_model_id() maps it to OCR_BASE_MODEL_ID.
             if self.valves.ENABLE_OCR_VIRTUAL_MODEL:
-                ocr_virtual_id = (self.valves.OCR_VIRTUAL_MODEL_ID or "").strip()
+                ocr_virtual_id = self.strip_prefix(
+                    self.valves.OCR_VIRTUAL_MODEL_ID or ""
+                )
                 if ocr_virtual_id:
                     model_map[ocr_virtual_id] = {
                         "id": ocr_virtual_id,
-                        "name": self.valves.OCR_VIRTUAL_MODEL_NAME,
+                        "name": self.valves.OCR_VIRTUAL_MODEL_NAME.replace(
+                            "Gemini 3.7 Flash OCR", "Gemini 3.8 Flash OCR"
+                        ),
                         "image_generation": False,
                         "video_generation": False,
                     }
@@ -1252,7 +1477,9 @@ class Pipe:
             whitelist = self.valves.MODEL_WHITELIST
             if whitelist:
                 self.log.debug(f"Applying model whitelist: {whitelist}")
-                whitelisted_ids = set(re.findall(r"[^,\s]+", whitelist))
+                whitelisted_ids = {
+                    self.strip_prefix(v) for v in re.findall(r"[^,\s]+", whitelist)
+                }
                 # Filter to only include whitelisted models
                 filtered_models = {
                     k: v for k, v in model_map.items() if k in whitelisted_ids
@@ -1395,8 +1622,9 @@ class Pipe:
         ):
             return False
 
-        # By default, assume models support thinking
-        return True
+        return model_id.startswith("gemini-2.5-") or self._is_gemini_3_family_model(
+            model_id
+        )
 
     def _check_thinking_level_support(self, model_id: str) -> bool:
         """
@@ -1414,22 +1642,40 @@ class Pipe:
         return self._is_gemini_3_family_model(model_id)
 
     def _get_supported_thinking_levels(self, model_id: str) -> List[str]:
-        """Return known/compatible thinking levels for a Gemini 3 model."""
+        """Return known/compatible thinking levels for a Gemini 3 model.
+
+        Google documents Gemini 3.7 Flash (and current 3.8 Flash) as supporting
+        low/medium/high only; sending minimal to 3.7 returns an API error.
+        Gemini 3.5/3.6 Flash support minimal/low/medium/high. Nano Banana 2
+        (Gemini 3.1 Flash Image) supports minimal/high.
+        """
         model_lower = model_id.lower()
 
-        # Gemini 3.1 Flash-Lite Image has a deliberately narrow control surface.
+        # Nano Banana 2 / Flash-Lite Image use a deliberately narrow control surface.
         if model_lower.startswith(
             "gemini-3.1-flash-lite-image"
         ) or model_lower.startswith("gemini-3.1-flash-image"):
             return ["minimal", "high"]
 
-        # Modern Flash families expose the full level set. This deliberately
-        # includes Gemini 3.7+ so a new Flash release does not get coerced from
-        # medium/minimal to high by an older hard-coded compatibility table.
         version = self._gemini_version_tuple(model_lower)
-        if "flash" in model_lower and (
-            model_lower.startswith("gemini-3-flash")
-            or (version is not None and version >= (3, 5))
+
+        # Gemini 3.7+ Flash currently supports low/medium/high (no minimal).
+        if (
+            "flash" in model_lower
+            and "image" not in model_lower
+            and version is not None
+            and version >= (3, 7)
+        ):
+            return ["low", "medium", "high"]
+
+        # Gemini 3.5/3.6 Flash and Gemini 3 Flash preview expose all four levels.
+        if (
+            "flash" in model_lower
+            and "image" not in model_lower
+            and (
+                model_lower.startswith("gemini-3-flash")
+                or (version is not None and (3, 5) <= version < (3, 7))
+            )
         ):
             return ["minimal", "low", "medium", "high"]
 
@@ -1628,11 +1874,12 @@ class Pipe:
             return False
 
         try:
-            await __event_emitter__(
+            await self._emit_optional(
+                __event_emitter__,
                 {
                     "type": "files",
                     "data": {"files": image_files},
-                }
+                },
             )
             return True
         except Exception as emit_error:
@@ -1649,11 +1896,12 @@ class Pipe:
             return False
 
         try:
-            await __event_emitter__(
+            await self._emit_optional(
+                __event_emitter__,
                 {
                     "type": "files",
                     "data": {"files": video_files},
-                }
+                },
             )
             return True
         except Exception as emit_error:
@@ -1902,67 +2150,29 @@ class Pipe:
         return types.GenerateVideosConfig(**config_params)
 
     def pipes(self) -> List[Dict[str, str]]:
-        """
-        Returns a list of available Google Gemini models for the UI.
-
-        Nano Banana 2 is optionally injected here *after* Google model discovery,
-        cache handling, MODEL_ADDITIONAL, and MODEL_WHITELIST filtering. This
-        makes the dedicated image model reliably visible in Open WebUI even when
-        an older saved Valve configuration would otherwise hide it.
-        """
-        try:
-            self.name = "Google Gemini: "
-            models = list(self.get_google_models())
-
-            if self.valves.FORCE_NANO_BANANA_2_VISIBLE:
-                image_model_id = self.strip_prefix(
-                    self.valves.AUTO_IMAGE_MODEL or "gemini-3.1-flash-image"
-                )
-                # The public Nano Banana 2 GA model is gemini-3.1-flash-image.
-                # If AUTO_IMAGE_MODEL is a legacy alias, normalize it through
-                # _prepare_model_id() before exposing it.
-                try:
-                    image_model_id = self._prepare_model_id(image_model_id)
-                except Exception:
-                    image_model_id = "gemini-3.1-flash-image"
-
-                if image_model_id != "gemini-3.1-flash-image":
-                    # Keep the dedicated picker entry stable even when the
-                    # automatic router is configured to another image model.
-                    image_model_id = "gemini-3.1-flash-image"
-
-                if not any(m.get("id") == image_model_id for m in models):
-                    models.append(
-                        {
-                            "id": image_model_id,
-                            "name": "Nano Banana 2 🎨",
-                            "image_generation": True,
-                            "video_generation": False,
-                        }
-                    )
-                    self.log.info(
-                        "Force-added Nano Banana 2 to model picker: %s",
-                        image_model_id,
-                    )
-                else:
-                    for m in models:
-                        if m.get("id") == image_model_id:
-                            m["name"] = "Nano Banana 2 🎨"
-                            m["image_generation"] = True
-                            break
-
+        models = [dict(model) for model in self.get_google_models()]
+        if any(model.get("id") == "error" for model in models):
             return models
-
-        except ValueError as e:
-            # Handle the case where API key is missing during pipe listing
-            self.log.error(f"Error during pipes listing (validation): {e}")
-            return [{"id": "error", "name": str(e)}]
-        except Exception as e:
-            # Handle other potential errors during model fetching
-            self.log.exception(
-                f"An unexpected error occurred during pipes listing: {str(e)}"
+        image_id = self._prepare_model_id(self.valves.AUTO_IMAGE_MODEL)
+        whitelist = {
+            self.strip_prefix(v)
+            for v in re.findall(r"[^,\s]+", self.valves.MODEL_WHITELIST or "")
+        }
+        if (
+            self.valves.FORCE_NANO_BANANA_2_VISIBLE
+            and (not whitelist or image_id in whitelist)
+            and self._check_image_generation_support(image_id)
+            and not any(m.get("id") == image_id for m in models)
+        ):
+            models.append(
+                {
+                    "id": image_id,
+                    "name": image_id + " 🎨",
+                    "image_generation": True,
+                    "video_generation": False,
+                }
             )
-            return [{"id": "error", "name": f"An unexpected error occurred: {str(e)}"}]
+        return models
 
     def _is_ocr_virtual_model(self, model_id: str) -> bool:
         """Return True when an Open WebUI request selected the virtual OCR model."""
@@ -1971,7 +2181,11 @@ class Pipe:
 
         requested = self.strip_prefix(str(model_id))
         virtual_id = self.strip_prefix((self.valves.OCR_VIRTUAL_MODEL_ID or "").strip())
-        return bool(virtual_id) and requested == virtual_id
+        return requested in {
+            virtual_id,
+            "gemini-3.7-flash-ocr",
+            "gemini-3.8-flash-ocr",
+        } and bool(requested)
 
     def _apply_ocr_system_prompt(
         self, system_instruction: Optional[str]
@@ -2031,6 +2245,9 @@ class Pipe:
             base_model_id = self.strip_prefix(
                 (self.valves.OCR_BASE_MODEL_ID or "").strip()
             )
+            # Upgrade the old persisted OCR default as well as fresh installs.
+            if base_model_id == "gemini-3.7-flash":
+                base_model_id = "gemini-3.8-flash"
             if not base_model_id.startswith("gemini-"):
                 raise ValueError(
                     "OCR_BASE_MODEL_ID must be a Gemini model ID "
@@ -2200,7 +2417,11 @@ class Pipe:
                     or file_info.get("filename")
                     or entry.get("filename")
                     or fid,
-                    "content_type": meta.get("content_type"),
+                    "content_type": (
+                        entry.get("content_type")
+                        or file_info.get("content_type")
+                        or meta.get("content_type")
+                    ),
                 }
             )
 
@@ -2208,7 +2429,7 @@ class Pipe:
             if not isinstance(entry, dict):
                 continue
             entry_type = entry.get("type", "file")
-            if entry_type == "file":
+            if entry_type in {"file", "image", "image_file"}:
                 _add(entry)
             elif entry_type == "collection":
                 for inner in entry.get("files") or []:
@@ -2241,6 +2462,317 @@ class Pipe:
         except Exception as e:
             self.log.warning(f"BYPASS_BACKEND_RAG: failed to load file {file_id}: {e}")
             return None, None
+
+    @staticmethod
+    def _is_hwpx_document(name: str, mime_type: str) -> bool:
+        """Return True for HWPX using extension + common MIME aliases."""
+        lower_name = str(name or "").lower().strip()
+        lower_mime = str(mime_type or "").lower().split(";", 1)[0].strip()
+        return lower_name.endswith(".hwpx") or lower_mime in {
+            "application/hwp+zip",
+            "application/vnd.hancom.hwpx",
+            "application/x-hwpx",
+        }
+
+    @staticmethod
+    def _hwpx_local_name(tag: str) -> str:
+        return str(tag or "").rsplit("}", 1)[-1].lower()
+
+    @staticmethod
+    def _validate_hwpx_archive(zf):
+        entries = zf.infolist()
+        if len(entries) > 4096 or sum(i.file_size for i in entries) > 128 * 1024 * 1024:
+            raise ValueError("HWPX archive exceeds extraction limits")
+        if any(i.file_size > 32 * 1024 * 1024 for i in entries):
+            raise ValueError("HWPX archive member exceeds 32 MiB")
+
+    def _extract_hwpx_text(self, data: bytes) -> Tuple[str, Dict[str, Any]]:
+        """Extract HWPX body text directly from the ZIP/XML package.
+
+        HWPX is a ZIP-based XML format. We read Contents/section*.xml in numeric
+        order and preserve paragraph/table-cell order as plain text. No third-party
+        package is required.
+        """
+        stats: Dict[str, Any] = {
+            "sections": 0,
+            "text_chars": 0,
+            "used_preview_text": False,
+        }
+        if not data:
+            return "", stats
+
+        with zipfile.ZipFile(io.BytesIO(data)) as zf:
+            self._validate_hwpx_archive(zf)
+            names = zf.namelist()
+
+            section_names = [
+                n for n in names if re.match(r"(?i)^Contents/section\d+\.xml$", n)
+            ]
+
+            def section_key(value: str) -> int:
+                match = re.search(r"(\d+)(?=\.xml$)", value)
+                return int(match.group(1)) if match else 10**9
+
+            section_names.sort(key=section_key)
+            stats["sections"] = len(section_names)
+
+            all_chunks: List[str] = []
+
+            for section_name in section_names:
+                try:
+                    raw_xml = zf.read(section_name)
+                    section_chunks: List[str] = []
+
+                    def walk(elem):
+                        local = self._hwpx_local_name(elem.tag)
+                        if local == "t":
+                            section_chunks.append(elem.text or "")
+                        elif local == "tab":
+                            section_chunks.append("\t")
+                        elif local in {"linebreak", "line-break", "br"}:
+                            section_chunks.append("\n")
+                        for child in elem:
+                            walk(child)
+                            if local == "t":
+                                section_chunks.append(child.tail or "")
+                        if local == "p":
+                            section_chunks.append("\n")
+
+                    walk(ET.fromstring(raw_xml))
+
+                    section_text = "".join(section_chunks)
+                    if section_text.strip():
+                        all_chunks.append(section_text)
+                except Exception as section_error:
+                    self.log.warning(
+                        "HWPX: failed to parse %s: %s",
+                        section_name,
+                        section_error,
+                    )
+
+            text = "\n".join(all_chunks)
+
+            # If section XML contains no useful text, Preview/PrvText.txt is a
+            # cheap compatibility fallback. Some image-centric HWPX files place
+            # only a short description there.
+            if not text.strip():
+                preview_name = next(
+                    (n for n in names if n.lower() == "preview/prvtext.txt"),
+                    None,
+                )
+                if preview_name:
+                    try:
+                        preview_bytes = zf.read(preview_name)
+                        text = preview_bytes.decode("utf-8", errors="replace")
+                        stats["used_preview_text"] = True
+                    except Exception:
+                        pass
+
+        # Normalize only layout noise. Do not rewrite document wording.
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
+        text = re.sub(r"[ \t]+\n", "\n", text)
+        text = re.sub(r"\n{4,}", "\n\n\n", text).strip()
+
+        max_chars = int(self.valves.HWPX_MAX_TEXT_CHARS)
+        if len(text) > max_chars:
+            text = (
+                text[:max_chars].rstrip()
+                + "\n\n[HWPX text truncated by HWPX_MAX_TEXT_CHARS]"
+            )
+            stats["truncated"] = True
+
+        stats["text_chars"] = len(text)
+        return text, stats
+
+    def _extract_hwpx_images(
+        self, data: bytes
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+        """Extract supported BinData images from an HWPX package."""
+        parts: List[Dict[str, Any]] = []
+        stats: Dict[str, Any] = {
+            "images_found": 0,
+            "images_attached": 0,
+            "preview_attached": False,
+        }
+        if (
+            not data
+            or not self.valves.HWPX_INCLUDE_EMBEDDED_IMAGES
+            or self.valves.HWPX_MAX_EMBEDDED_IMAGES <= 0
+        ):
+            return parts, stats
+
+        mime_by_ext = {
+            ".png": "image/png",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".webp": "image/webp",
+            ".gif": "image/gif",
+            ".bmp": "image/bmp",
+        }
+        max_image_bytes = max(1, int(self.valves.HWPX_MAX_IMAGE_MB)) * 1024 * 1024
+        max_images = int(self.valves.HWPX_MAX_EMBEDDED_IMAGES)
+
+        with zipfile.ZipFile(io.BytesIO(data)) as zf:
+            self._validate_hwpx_archive(zf)
+            names = zf.namelist()
+            image_names = [
+                n
+                for n in names
+                if n.lower().startswith("bindata/")
+                and Path(n).suffix.lower() in mime_by_ext
+            ]
+            image_names.sort()
+            stats["images_found"] = len(image_names)
+
+            for image_name in image_names:
+                if stats["images_attached"] >= max_images:
+                    break
+                try:
+                    info = zf.getinfo(image_name)
+                    if info.file_size > max_image_bytes:
+                        self.log.info(
+                            "HWPX: skipping large embedded image %s (%.2f MB)",
+                            image_name,
+                            info.file_size / (1024 * 1024),
+                        )
+                        continue
+                    raw = zf.read(image_name)
+                    mime = mime_by_ext[Path(image_name).suffix.lower()]
+                    if mime in {"image/gif", "image/bmp"}:
+                        with Image.open(io.BytesIO(raw)) as embedded:
+                            converted = io.BytesIO()
+                            embedded.convert("RGB").save(converted, format="PNG")
+                            raw = converted.getvalue()
+                        mime = "image/png"
+                        if len(raw) > max_image_bytes:
+                            continue
+                    parts.append(
+                        {
+                            "text": (
+                                f"[Embedded image from HWPX: {Path(image_name).name}]"
+                            )
+                        }
+                    )
+                    parts.append(
+                        {
+                            "inline_data": {
+                                "mime_type": mime,
+                                "data": base64.b64encode(raw).decode("utf-8"),
+                            }
+                        }
+                    )
+                    stats["images_attached"] += 1
+                except Exception as image_error:
+                    self.log.warning(
+                        "HWPX: failed to extract embedded image %s: %s",
+                        image_name,
+                        image_error,
+                    )
+
+        return parts, stats
+
+    def _extract_hwpx_preview_image(self, data: bytes) -> Optional[Dict[str, Any]]:
+        """Return Preview/PrvImage.* as an inline image when available."""
+        if not data or not self.valves.HWPX_INCLUDE_PREVIEW_IF_EMPTY:
+            return None
+
+        mime_by_ext = {
+            ".png": "image/png",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".webp": "image/webp",
+        }
+
+        try:
+            with zipfile.ZipFile(io.BytesIO(data)) as zf:
+                self._validate_hwpx_archive(zf)
+                candidates = [
+                    n
+                    for n in zf.namelist()
+                    if n.lower().startswith("preview/prvimage")
+                    and Path(n).suffix.lower() in mime_by_ext
+                ]
+                if not candidates:
+                    return None
+                name = sorted(candidates)[0]
+                raw = zf.read(name)
+                if len(raw) > int(self.valves.HWPX_MAX_IMAGE_MB) * 1024 * 1024:
+                    return None
+                return {
+                    "inline_data": {
+                        "mime_type": mime_by_ext[Path(name).suffix.lower()],
+                        "data": base64.b64encode(raw).decode("utf-8"),
+                    }
+                }
+        except Exception as preview_error:
+            self.log.debug("HWPX preview extraction failed: %s", preview_error)
+            return None
+
+    async def _build_hwpx_document_parts(
+        self,
+        *,
+        data: Optional[bytes],
+        name: str,
+        mime_type: str,
+    ) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+        """Build Gemini text/image parts for .hwpx without sending HWPX bytes natively."""
+        if (
+            not self.valves.ENABLE_HWPX_SUPPORT
+            or not self._is_hwpx_document(name, mime_type)
+            or not data
+        ):
+            return [], None
+
+        try:
+            text, text_stats = self._extract_hwpx_text(data)
+            image_parts, image_stats = self._extract_hwpx_images(data)
+
+            parts: List[Dict[str, Any]] = []
+
+            if text:
+                parts.append(
+                    {
+                        "text": (
+                            f'<file name="{name}" format="HWPX" '
+                            f'extraction="direct-xml">\n{text}\n</file>'
+                        )
+                    }
+                )
+
+            if image_parts:
+                parts.extend(image_parts)
+
+            if not text and not image_parts:
+                preview = self._extract_hwpx_preview_image(data)
+                if preview:
+                    parts.append(
+                        {
+                            "text": (
+                                f"[HWPX preview image for visually reading '{name}']"
+                            )
+                        }
+                    )
+                    parts.append(preview)
+                    image_stats["preview_attached"] = True
+
+            if parts:
+                self.log.info(
+                    "HWPX: attached '%s' via direct extraction "
+                    "(sections=%s, text_chars=%s, embedded_images=%s, preview=%s)",
+                    name,
+                    text_stats.get("sections"),
+                    text_stats.get("text_chars"),
+                    image_stats.get("images_attached"),
+                    image_stats.get("preview_attached"),
+                )
+                return parts, "hwpx-direct"
+
+        except zipfile.BadZipFile:
+            self.log.warning("HWPX: '%s' is not a valid ZIP/HWPX package", name)
+        except Exception as hwpx_error:
+            self.log.warning("HWPX extraction failed for '%s': %s", name, hwpx_error)
+
+        return [], None
 
     def _is_gemini_supported_doc_mime(self, mime_type: str) -> bool:
         return mime_type.startswith("text/") or (
@@ -2288,7 +2820,7 @@ class Pipe:
             return None
 
     async def _build_rag_bypass_parts(
-        self, metadata_files: List[Dict[str, Any]]
+        self, metadata_files: List[Dict[str, Any]], *, require_full_pdf: bool = False
     ) -> Tuple[List[Dict[str, Any]], List[str]]:
         """Convert Open WebUI file attachments into native Gemini parts.
 
@@ -2314,8 +2846,49 @@ class Pipe:
                 .strip()
             )
 
+            if name.lower().endswith(".pdf"):
+                mime_type = "application/pdf"
+
+            # HWPX is unpacked locally into XML text + embedded images.
+            # Binary .hwp is intentionally not specially handled here.
+            if self.valves.ENABLE_HWPX_SUPPORT and self._is_hwpx_document(
+                name, mime_type
+            ):
+                hwpx_parts, hwpx_method = await self._build_hwpx_document_parts(
+                    data=data,
+                    name=name,
+                    mime_type=mime_type,
+                )
+                if hwpx_parts:
+                    parts.extend(hwpx_parts)
+                    attached_names.append(name)
+                    self.log.info(
+                        "BYPASS_BACKEND_RAG: HWPX '%s' prepared via %s",
+                        name,
+                        hwpx_method,
+                    )
+                    continue
+
             part: Optional[Dict[str, Any]] = None
-            if data and self._is_gemini_supported_doc_mime(mime_type):
+            if data and (
+                mime_type.startswith("text/")
+                or mime_type in self.GEMINI_NATIVE_DOC_MIME_TYPES - {"application/pdf"}
+            ):
+                try:
+                    decoded = data.decode("utf-8-sig")
+                    part = {"text": f'<file name="{name}">\n{decoded}\n</file>'}
+                except UnicodeDecodeError:
+                    pass  # Fall back to backend-extracted text for other encodings.
+            if data and mime_type.startswith("image/"):
+                url = f"data:{mime_type};base64," + base64.b64encode(data).decode(
+                    "ascii"
+                )
+                image_parts = self._process_multimodal_content(
+                    [{"type": "image_url", "image_url": {"url": url}}]
+                )
+                if image_parts and "inline_data" in image_parts[0]:
+                    part = image_parts[0]
+            if data and mime_type == "application/pdf":
                 if len(data) <= max_inline_bytes:
                     part = {
                         "inline_data": {
@@ -2330,6 +2903,11 @@ class Pipe:
                     )
                     part = await self._upload_to_google_files_api(data, mime_type, name)
 
+            if part is None and require_full_pdf and mime_type == "application/pdf":
+                raise ValueError(
+                    f"OCR PDF 원문 전달 실패: {name}. 파일 접근 또는 업로드 상태를 확인하세요. "
+                    "추출 텍스트만으로 전체 PDF OCR을 대신하지 않습니다."
+                )
             if part is None:
                 # Fallback: use the text the backend extracted at upload time.
                 extracted = (getattr(file_obj, "data", None) or {}).get("content")
@@ -2375,16 +2953,41 @@ class Pipe:
         # (mirrors how the Gemini Manifold pipe consumes its companion filter).
         # Skipped for background task requests (title/tags generation, etc.).
         stashed_files = (__metadata__ or {}).get("_google_gemini_bypassed_files")
-        bypass_rag = (self.valves.BYPASS_BACKEND_RAG or bool(stashed_files)) and not (
-            (__metadata__ or {}).get("task")
-        )
-        if bypass_rag:
+        ocr_full_pdf = bool((__metadata__ or {}).get("_google_gemini_ocr_full_pdf"))
+        bypass_rag = (
+            self.valves.BYPASS_BACKEND_RAG or bool(stashed_files) or ocr_full_pdf
+        ) and not ((__metadata__ or {}).get("task"))
+        metadata_files = self._collect_metadata_files(__metadata__)
+        if (__metadata__ or {}).get("task"):
+            metadata_files = []
+        elif not bypass_rag:
+            metadata_files = [
+                entry
+                for entry in metadata_files
+                if (
+                    self.valves.ENABLE_HWPX_SUPPORT
+                    and self._is_hwpx_document(
+                        entry.get("name", ""), entry.get("content_type", "")
+                    )
+                )
+                or str(entry.get("content_type") or "").startswith("image/")
+            ]
+        file_parts, attached_names = ([], [])
+        if metadata_files:
+            file_parts, attached_names = await self._build_rag_bypass_parts(
+                metadata_files, require_full_pdf=ocr_full_pdf
+            )
+        if bypass_rag and metadata_files and len(attached_names) == len(metadata_files):
             messages = self._strip_backend_rag_context(messages)
 
         # Extract user-defined system message
-        user_system_message = next(
-            (msg["content"] for msg in messages if msg.get("role") == "system"),
-            None,
+        user_system_message = (
+            "\n\n".join(
+                self._message_text(msg.get("content"))
+                for msg in messages
+                if msg.get("role") in {"system", "developer"}
+            )
+            or None
         )
 
         # Combine with default system prompt if configured
@@ -2394,7 +2997,7 @@ class Pipe:
         contents = []
         for message in messages:
             role = message.get("role")
-            if role == "system":
+            if role in {"system", "developer"}:
                 continue  # Skip system messages, handled separately
 
             content = message.get("content", "")
@@ -2402,7 +3005,23 @@ class Pipe:
 
             # Handle different content types
             if isinstance(content, list):  # Multimodal content
-                parts.extend(self._process_multimodal_content(content))
+                resolved_content = []
+                for item in content:
+                    item = copy.deepcopy(item)
+                    if item.get("type") == "image_url":
+                        image_ref = item.get("image_url") or {}
+                        url = (
+                            image_ref
+                            if isinstance(image_ref, str)
+                            else image_ref.get("url", "")
+                        )
+                        if "/api/v1/files/" in url or url.startswith("/files/"):
+                            loaded = await self._fetch_file_as_base64(url)
+                            if loaded:
+                                url = loaded
+                        item["image_url"] = {"url": url}
+                    resolved_content.append(item)
+                parts.extend(self._process_multimodal_content(resolved_content))
             elif isinstance(content, str):  # Plain text content
                 parts.append({"text": content})
             else:
@@ -2417,12 +3036,9 @@ class Pipe:
         # Bypass backend RAG: attach the original files natively to the last
         # user turn (mirrors the Gemini Manifold google_genai behavior of
         # attaching bypassed files to the last user message).
-        if bypass_rag and contents:
-            metadata_files = self._collect_metadata_files(__metadata__)
+        if file_parts and contents:
             if metadata_files:
-                file_parts, attached_names = await self._build_rag_bypass_parts(
-                    metadata_files
-                )
+                # Already loaded before deciding whether RAG context can be removed.
                 if file_parts:
                     last_user_content = next(
                         (c for c in reversed(contents) if c.get("role") == "user"),
@@ -2439,18 +3055,19 @@ class Pipe:
                         )
                         if __event_emitter__:
                             try:
-                                await __event_emitter__(
+                                await self._emit_optional(
+                                    __event_emitter__,
                                     {
                                         "type": "status",
                                         "data": {
                                             "action": "rag_bypass",
                                             "description": (
-                                                f"Attached {len(file_parts)} file(s) "
-                                                "natively (backend RAG bypassed)"
+                                                f"Prepared {len(attached_names)} file(s) "
+                                                "for Gemini"
                                             ),
                                             "done": True,
                                         },
-                                    }
+                                    },
                                 )
                             except Exception as emit_error:
                                 self.log.debug(
@@ -3022,7 +3639,8 @@ class Pipe:
             URL to uploaded image or data URL fallback
         """
         try:
-            await __event_emitter__(
+            await self._emit_optional(
+                __event_emitter__,
                 {
                     "type": "status",
                     "data": {
@@ -3030,7 +3648,7 @@ class Pipe:
                         "description": "Uploading generated image to your library...",
                         "done": False,
                     },
-                }
+                },
             )
 
             self.user = user = await Users.get_user_by_id(__user__["id"])
@@ -3048,7 +3666,8 @@ class Pipe:
                 mime_type=mime_type,
             )
 
-            await __event_emitter__(
+            await self._emit_optional(
+                __event_emitter__,
                 {
                     "type": "status",
                     "data": {
@@ -3056,7 +3675,7 @@ class Pipe:
                         "description": "Image uploaded successfully!",
                         "done": True,
                     },
-                }
+                },
             )
 
             return image_url
@@ -3069,7 +3688,8 @@ class Pipe:
             else:
                 image_data_b64 = str(image_data)
 
-            await __event_emitter__(
+            await self._emit_optional(
+                __event_emitter__,
                 {
                     "type": "status",
                     "data": {
@@ -3077,7 +3697,7 @@ class Pipe:
                         "description": "Using inline image (upload failed)",
                         "done": True,
                     },
-                }
+                },
             )
 
             return f"data:{mime_type};base64,{image_data_b64}"
@@ -3251,7 +3871,8 @@ class Pipe:
             Tuple of (file_entry_or_None, content_url_or_data_url_or_None)
         """
         try:
-            await __event_emitter__(
+            await self._emit_optional(
+                __event_emitter__,
                 {
                     "type": "status",
                     "data": {
@@ -3259,7 +3880,7 @@ class Pipe:
                         "description": "Uploading generated video to your library...",
                         "done": False,
                     },
-                }
+                },
             )
 
             self.user = user = await Users.get_user_by_id(__user__["id"])
@@ -3274,7 +3895,8 @@ class Pipe:
                 message_id=message_id,
             )
 
-            await __event_emitter__(
+            await self._emit_optional(
+                __event_emitter__,
                 {
                     "type": "status",
                     "data": {
@@ -3282,14 +3904,15 @@ class Pipe:
                         "description": "Video uploaded successfully!",
                         "done": True,
                     },
-                }
+                },
             )
             return file_entry, video_url
 
         except Exception as e:
             self.log.warning(f"Video upload failed, falling back to data URL: {e}")
             video_data_b64 = base64.b64encode(video_data).decode("utf-8")
-            await __event_emitter__(
+            await self._emit_optional(
+                __event_emitter__,
                 {
                     "type": "status",
                     "data": {
@@ -3297,7 +3920,7 @@ class Pipe:
                         "description": "Using inline video (upload failed)",
                         "done": True,
                     },
-                }
+                },
             )
             return None, f"data:{mime_type};base64,{video_data_b64}"
 
@@ -3397,6 +4020,14 @@ class Pipe:
             return False
 
         t = text.strip().lower()
+        if re.search(
+            r"(ocr|텍스트\s*추출|글자\s*추출|전사|번역|transcrib|extract\s+text)", t
+        ):
+            return False
+        if re.search(
+            r"(이미지|그림|사진|image|picture).{0,30}(만들지|생성하지|그리지)", t
+        ) or re.search(r"(?:do not|don't|never)\s+(?:create|generate|draw)", t):
+            return False
 
         # Explicit image creation nouns.
         image_nouns_ko = (
@@ -3440,6 +4071,273 @@ class Pipe:
             return True
 
         return False
+
+    def _is_auto_thinking_candidate_model(self, model_id: str) -> bool:
+        """Auto-route thinking only for Gemini 3.x Flash text models.
+
+        OCR, image, video, Pro, and older Gemini 2.5 models keep their existing
+        dedicated/default thinking behavior.
+        """
+        model_lower = str(model_id or "").lower()
+        if not self._check_thinking_level_support(model_lower):
+            return False
+        if self._check_image_generation_support(model_lower):
+            return False
+        if self._check_video_generation_support(model_lower):
+            return False
+        return "flash" in model_lower and "image" not in model_lower
+
+    @staticmethod
+    def _count_request_attachments(
+        body: Dict[str, Any], __metadata__: Optional[Dict[str, Any]] = None
+    ) -> Tuple[int, int, int]:
+        """Return (total_files, image_files, document_files) for routing hints.
+
+        Counts best-effort references across Open WebUI message content, body
+        files, metadata files, and the RAG-bypass companion stash. Duplicate
+        IDs/URLs are collapsed so the same upload does not inflate complexity.
+        """
+        seen: set[str] = set()
+        image_count = 0
+        document_count = 0
+
+        def add_entry(entry: Any, prefix: str = "file") -> None:
+            nonlocal image_count, document_count
+            if not isinstance(entry, dict):
+                return
+
+            mime = (
+                str(
+                    entry.get("content_type")
+                    or (entry.get("meta") or {}).get("content_type")
+                    or entry.get("mime_type")
+                    or ""
+                )
+                .split(";")[0]
+                .strip()
+                .lower()
+            )
+            ftype = str(entry.get("type") or "").lower()
+            fid = str(entry.get("id") or entry.get("file_id") or "").strip()
+            url = str(
+                entry.get("url")
+                or entry.get("content_url")
+                or entry.get("image_url")
+                or ""
+            ).strip()
+            name = str(entry.get("name") or entry.get("filename") or "").strip()
+            key = fid or url or (f"{name}|{mime}" if name or mime else "")
+            if not key:
+                key = f"{prefix}:{id(entry)}"
+            if key in seen:
+                return
+            seen.add(key)
+
+            is_image = mime.startswith("image/") or ftype in {
+                "image",
+                "image_file",
+                "input_image",
+                "image_url",
+            }
+            if is_image:
+                image_count += 1
+            else:
+                document_count += 1
+
+        for entry in body.get("files") or []:
+            add_entry(entry, "body")
+
+        body_md = body.get("metadata") or {}
+        metadata_sources: List[Dict[str, Any]] = []
+        if isinstance(body_md, dict):
+            metadata_sources.append(body_md)
+        if isinstance(__metadata__, dict):
+            metadata_sources.append(__metadata__)
+
+        for md in metadata_sources:
+            for key in ("files", "_google_gemini_bypassed_files"):
+                for entry in md.get(key) or []:
+                    add_entry(entry, key)
+
+        # Structured content can hold images/files directly.
+        for msg_index, msg in enumerate(body.get("messages") or []):
+            if not isinstance(msg, dict):
+                continue
+            for entry in msg.get("files") or msg.get("attachments") or []:
+                add_entry(entry, f"msg{msg_index}")
+            content = msg.get("content")
+            if not isinstance(content, list):
+                continue
+            for item_index, item in enumerate(content):
+                if not isinstance(item, dict):
+                    continue
+                item_type = str(item.get("type") or "").lower()
+                if item_type in {
+                    "image",
+                    "image_url",
+                    "input_image",
+                    "image_file",
+                    "file",
+                    "input_file",
+                }:
+                    add_entry(item, f"content{msg_index}:{item_index}")
+
+        return len(seen), image_count, document_count
+
+    @staticmethod
+    def _auto_thinking_text_score(text: str) -> Tuple[int, List[str]]:
+        """Score the latest user text for reasoning complexity.
+
+        This is intentionally conservative. It uses no model/API call, so the
+        latency and token cost of routing are effectively zero.
+        """
+        if not text:
+            return 0, ["empty/very short request"]
+
+        t = text.strip()
+        lower = t.lower()
+        score = 0
+        reasons: List[str] = []
+
+        # Strong hard-reasoning signals.
+        hard_patterns = [
+            r"(증명해|증명하|수학적\s*증명|정리.*증명|유도해|엄밀하게|논리적으로\s*도출)",
+            r"(복잡한\s*오류|근본\s*원인|원인\s*분석|디버깅|debug|stack\s*trace|traceback)",
+            r"(알고리즘.*복잡도|시간\s*복잡도|공간\s*복잡도|최적화|optimization|race\s*condition|deadlock)",
+            r"(아키텍처|architecture|시스템\s*설계|설계\s*대안|trade[- ]?off|트레이드오프)",
+            r"(다단계\s*추론|multi[- ]?step|formal\s*proof|theorem|derive|derivation)",
+            r"(미적분|적분|미분|확률\s*분포|선형대수|행렬|수열|기하|combinatorics|calculus|integral|derivative)",
+            r"(취약점\s*분석|보안\s*검토|security\s*review|root\s*cause)",
+        ]
+        if any(re.search(p, lower, flags=re.IGNORECASE) for p in hard_patterns):
+            score += 5
+            reasons.append("hard reasoning/debug/math signal")
+
+        # General analysis/synthesis signals.
+        analysis_patterns = [
+            r"(분석해|분석하|비교해|비교하|검토해|검토하|평가해|평가하|종합해|종합하)",
+            r"(장단점|근거와\s*함께|단계별|체계적으로|상세하게|심층|정교하게)",
+            r"\b(analy[sz]e|compare|evaluate|review|synthesize|reason|step[- ]by[- ]step)\b",
+            r"(코드.*작성|코드.*수정|함수.*수정|구현해|리팩터링|refactor|implement)",
+            r"(세특|생기부|생활기록부|교과학습발달상황|학생부|평가서|"
+            r"프롬프트.*(?:개선|작성|정교)|prompt.*(?:improve|design))",
+        ]
+        if any(re.search(p, lower, flags=re.IGNORECASE) for p in analysis_patterns):
+            score += 2
+            reasons.append("analysis/synthesis signal")
+
+        # Code blocks, logs, or structured technical payloads.
+        code_fences = t.count("```")
+        if code_fences >= 2 or re.search(
+            r"(^|\n)\s*(?:Traceback \(most recent call last\):|Exception:|Error:|"
+            r"SELECT\s+|CREATE\s+TABLE|function\s+\w+\s*\(|def\s+\w+\s*\(|"
+            r"class\s+\w+[:(]|\{[\s\S]{200,}\})",
+            t,
+            flags=re.IGNORECASE,
+        ):
+            score += 2
+            reasons.append("code/log/structured payload")
+
+        # Explicit multi-source or constraint-heavy tasks.
+        if re.search(
+            r"(여러\s*(?:자료|문서|파일|관점)|복수\s*(?:자료|문서)|상충|모순|"
+            r"제약\s*조건|조건을\s*모두|요구사항을\s*모두|multiple\s*(?:files|sources|documents)|"
+            r"conflicting|constraints?)",
+            lower,
+            flags=re.IGNORECASE,
+        ):
+            score += 2
+            reasons.append("multi-source/constraint signal")
+
+        # Simple tasks suppress overthinking unless other strong signals exist.
+        simple_patterns = [
+            r"^\s*(안녕|안녕하세요|고마워|감사|hello|hi|thanks)\b",
+            r"(번역해|번역해줘|translate\b)",
+            r"(뜻이\s*뭐|무슨\s*뜻|의미가\s*뭐|what does .* mean)",
+            r"(맞춤법|문법만|다듬어줘|고쳐줘|rewrite|proofread)",
+            r"(짧게\s*요약|간단히\s*요약|한\s*줄|한줄|요약해줘|summari[sz]e briefly)",
+        ]
+        if any(re.search(p, lower, flags=re.IGNORECASE) for p in simple_patterns):
+            score -= 2
+            reasons.append("simple translation/rewrite/chat signal")
+
+        # Very short requests are usually latency-sensitive.
+        if len(t) <= 120 and score <= 1:
+            score -= 1
+            reasons.append("short request")
+
+        return score, reasons
+
+    def _select_auto_thinking_level(
+        self,
+        body: Dict[str, Any],
+        model_id: str,
+        __metadata__: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[Optional[str], str]:
+        """Choose a model-valid thinking level using local request heuristics."""
+        if not self.valves.AUTO_THINKING:
+            return None, "AUTO_THINKING disabled"
+        if not self._is_auto_thinking_candidate_model(model_id):
+            return None, "model excluded from Auto Thinking"
+
+        text = self._last_user_text(body)
+        score, reasons = self._auto_thinking_text_score(text)
+        total_files, image_files, document_files = self._count_request_attachments(
+            body, __metadata__
+        )
+
+        # Length and attachment signals are additive so a long, multi-file
+        # analytical request naturally reaches high.
+        if len(text) >= self.valves.AUTO_THINKING_VERY_LONG_TEXT_CHARS:
+            score += 4
+            reasons.append(f"very long latest prompt ({len(text):,} chars)")
+        elif len(text) >= self.valves.AUTO_THINKING_LONG_TEXT_CHARS:
+            score += 2
+            reasons.append(f"long latest prompt ({len(text):,} chars)")
+
+        if total_files >= self.valves.AUTO_THINKING_MULTIFILE_THRESHOLD:
+            score += 2
+            score = max(score, 2)
+            reasons.append(f"multiple attachments ({total_files})")
+        elif document_files >= 1:
+            score += 2
+            score = max(score, 2)
+            reasons.append("document attachment")
+        elif image_files >= 1:
+            # A text question about one image usually needs some multimodal
+            # reasoning, but not automatically the maximum level.
+            score += 1
+            reasons.append("image attachment")
+
+        # Long-running/agentic tool requests benefit from at least medium.
+        metadata = __metadata__ or {}
+        params = metadata.get("params", {}) or {}
+        if params.get("function_calling") == "native" and body.get("tools"):
+            score += 1
+            reasons.append("native tool workflow")
+
+        # Convert score to target category.
+        if score >= 5:
+            requested = self.valves.AUTO_THINKING_COMPLEX_LEVEL
+            category = "complex"
+        elif score >= 2:
+            requested = self.valves.AUTO_THINKING_LONG_CONTEXT_LEVEL
+            category = "long/analytical"
+        else:
+            requested = self.valves.AUTO_THINKING_DEFAULT_LEVEL
+            category = "ordinary/simple"
+
+        validated = self._validate_thinking_level(requested, model_id)
+        if not validated:
+            # If an admin configured an invalid target, use the model's lowest
+            # known supported level rather than failing the whole request.
+            supported = self._get_supported_thinking_levels(model_id)
+            validated = supported[0] if supported else None
+
+        reason_text = f"{category}; score={score}; " + (
+            ", ".join(reasons) if reasons else "no strong complexity signal"
+        )
+        return validated, reason_text
 
     @staticmethod
     def _should_auto_google_search(text: str) -> bool:
@@ -3508,6 +4406,86 @@ class Pipe:
                 return True
         return False
 
+    @staticmethod
+    def _json_tool_result(value):
+        """Convert nested mapping proxies and standard model results at the AFC boundary."""
+        active = set()
+
+        def convert(item):
+            if item is None or isinstance(item, (str, bool, int, float)):
+                return item
+            marker = id(item)
+            if marker in active:
+                raise ValueError("Circular tool result")
+            active.add(marker)
+            try:
+                if isinstance(item, Mapping):
+                    return {str(k): convert(v) for k, v in item.items()}
+                if isinstance(item, (list, tuple, set, frozenset)):
+                    return [convert(v) for v in item]
+                if isinstance(item, BaseModel):
+                    return convert(item.model_dump(mode="python"))
+                if isinstance(item, bytes):
+                    return {
+                        "encoding": "base64",
+                        "data": base64.b64encode(item).decode("ascii"),
+                    }
+                raise TypeError("Unsupported tool result type: " + type(item).__name__)
+            finally:
+                active.remove(marker)
+
+        result = convert(value)
+        json.dumps(result, allow_nan=False)
+        return result
+
+    @staticmethod
+    def _named_native_tool(name, tool, used_names):
+        """Give each SDK callable a request-local name without mutating shared tools."""
+        original_name = str(name)
+        api_name = re.sub(r"[^A-Za-z0-9_]", "_", original_name)
+        if not api_name or not re.match(r"[A-Za-z_]", api_name):
+            api_name = "tool_" + api_name
+        if api_name != original_name or len(api_name) > 64:
+            digest = hashlib.sha256(original_name.encode()).hexdigest()[:12]
+            api_name = api_name[:51] + "_" + digest
+        base = api_name
+        number = 1
+        while api_name in used_names:
+            suffix = "_" + str(number)
+            api_name = base[: 64 - len(suffix)] + suffix
+            number += 1
+        used_names.add(api_name)
+
+        async def named_tool(*args, **kwargs):
+            try:
+                if inspect.iscoroutinefunction(tool):
+                    result = await tool(*args, **kwargs)
+                else:
+                    result = await asyncio.to_thread(tool, *args, **kwargs)
+                    if inspect.isawaitable(result):
+                        result = await result
+                return Pipe._json_tool_result(result)
+            except Exception as exc:
+                # Do not feed exception objects / HTTP headers to SDK serialization.
+                return {
+                    "error": {
+                        "tool": api_name,
+                        "type": type(exc).__name__,
+                        "message": str(exc),
+                    },
+                    "ok": False,
+                    "instruction": "The tool failed. Do not invent results or claim successful retrieval.",
+                }
+
+        # Both schema discovery and automatic-call dispatch use __name__.
+        # __signature__ keeps the public parameters instead of *args/**kwargs.
+        named_tool.__name__ = api_name
+        named_tool.__qualname__ = api_name
+        named_tool.__doc__ = getattr(tool, "__doc__", None) or original_name
+        named_tool.__annotations__ = dict(getattr(tool, "__annotations__", {}) or {})
+        named_tool.__signature__ = inspect.signature(tool)
+        return named_tool
+
     def _configure_generation(
         self,
         body: Dict[str, Any],
@@ -3533,12 +4511,28 @@ class Pipe:
         """
         ocr_mode = self._is_ocr_virtual_model(body.get("model", ""))
 
+        response_guidance = (
+            "응답 방식: 내부 지침은 조용히 적용하세요. 사용자가 지침 자체의 설명을 "
+            "요청하지 않았다면 AGENTS.md, 시스템 프롬프트, Skill 목록이나 준수 선언을 "
+            "인사말 또는 답변에 나열하지 마세요. 인사에는 간단히 인사하고 실제 질문에 답하세요. "
+            "최신 정보나 검색을 요청받으면 제공된 검색 도구를 사용하고 확인한 출처를 제시하세요. "
+            "도구가 실패하거나 검색 결과가 없으면 그 사실을 말하고 결과를 지어내지 마세요."
+        )
+        system_instruction = (
+            (system_instruction or "").rstrip() + "\n\n" + response_guidance
+        ).strip()
+
         # Gemini 3.6 Flash and future Gemini releases reject/deprecate the
         # legacy sampling controls temperature/top_p/top_k. Build a minimal
         # common config first, then add those controls only for older models.
         gen_config_params = {
             "max_output_tokens": body.get("max_tokens"),
-            "stop_sequences": body.get("stop") or None,
+            "stop_sequences": (
+                [body["stop"]]
+                if isinstance(body.get("stop"), str)
+                else body.get("stop")
+            )
+            or None,
             "system_instruction": system_instruction,
         }
 
@@ -3694,8 +4688,12 @@ class Pipe:
                             reasoning_effort, model_id
                         )
                         if validated_level and not ocr_mode:
-                            source = "per-chat reasoning_effort"
-                        else:
+                            source = (
+                                "AUTO_THINKING"
+                                if body.get("_google_auto_thinking")
+                                else "per-chat reasoning_effort"
+                            )
+                        elif not validated_level:
                             self.log.debug(
                                 f"Invalid reasoning_effort '{reasoning_effort}', falling back to THINKING_LEVEL"
                             )
@@ -3812,7 +4810,10 @@ class Pipe:
         is_background_task = bool(
             metadata.get("task") or (body.get("metadata") or {}).get("task")
         )
-        explicit_search_requested = bool(features.get("google_search_tool", False))
+        explicit_search_requested = bool(
+            features.get("google_search_tool", False)
+            or features.get("web_search", False)
+        )
         if ocr_mode and self.valves.OCR_DISABLE_GOOGLE_SEARCH:
             explicit_search_requested = False
         last_user_text = self._last_user_text(body)
@@ -3839,18 +4840,9 @@ class Pipe:
                 "Automatic Google Search suppressed because a relevant native utility tool is available"
             )
 
-        # Built-in + custom tool combination is preview behavior and is fragile
-        # on the google-genai version currently bundled by Open WebUI. Automatic
-        # Search therefore becomes query-selective and, by default, is isolated
-        # from native Python tools.
-        if auto_search_allowed and has_native_tools and not is_gemini_3:
-            auto_search_allowed = False
-            self.log.debug(
-                "Automatic Google Search suppressed for %s because native custom "
-                "tool combination requires Gemini 3",
-                model_id,
-            )
-
+        # Freshness/search intent may select Google grounding even when unrelated
+        # native tools are present. The isolation block below removes conflicting
+        # native tools unless combined-tool mode was explicitly enabled.
         google_search_requested = bool(explicit_search_requested or auto_search_allowed)
         # Search grounding is a text-generation tool; do not attach it to image
         # generation calls where tool combinations can be model-specific.
@@ -3870,7 +4862,7 @@ class Pipe:
                 )
 
         if google_search_enabled:
-            if self.valves.USE_ENTERPRISE_WEB_SEARCH:
+            if self.valves.USE_ENTERPRISE_WEB_SEARCH and self.valves.USE_VERTEX_AI:
                 self.log.debug("Enabling Enterprise Web Search grounding")
                 tools.append(
                     types.Tool(enterprise_web_search=types.EnterpriseWebSearch())
@@ -3886,7 +4878,11 @@ class Pipe:
                 self.log.debug("Enabling URL Context grounding")
                 tools.append(types.Tool(url_context=types.UrlContext()))
 
-        if not enable_image_generation and (
+        if (
+            not enable_image_generation
+            and self.valves.USE_VERTEX_AI
+            and not (ocr_mode and self.valves.OCR_DISABLE_GOOGLE_SEARCH)
+        ) and (
             features.get("vertex_ai_search", False)
             or (
                 self.valves.USE_VERTEX_AI
@@ -3919,6 +4915,7 @@ class Pipe:
                 )
 
         if __tools__ is not None and native_tools_for_request:
+            used_tool_names = set()
             for name, tool_def in __tools__.items():
                 if enable_image_generation and self._is_open_webui_image_tool(name):
                     self.log.debug(
@@ -3936,7 +4933,7 @@ class Pipe:
                         continue
                     signature = getattr(tool, "__signature__", None)
                     self.log.debug(f"Adding tool '{name}' with signature {signature}")
-                    tools.append(tool)
+                    tools.append(self._named_native_tool(name, tool, used_tool_names))
 
         if tools:
             gen_config_params["tools"] = tools
@@ -3974,12 +4971,11 @@ class Pipe:
                 )
 
             if self.valves.TOOL_COMBINATION_RAW_FALLBACK:
-                # google-genai HttpOptions.extra_body uses SDK/Python field
-                # names here (snake_case); the SDK converts them to backend JSON.
+                # extra_body is merged AFTER SDK conversion: use REST camelCase.
                 raw_tool_config = {
-                    "tool_config": {
-                        "include_server_side_tool_invocations": True,
-                        "function_calling_config": {"mode": "VALIDATED"},
+                    "toolConfig": {
+                        "includeServerSideToolInvocations": True,
+                        "functionCallingConfig": {"mode": "VALIDATED"},
                     }
                 }
                 try:
@@ -4080,11 +5076,14 @@ class Pipe:
         if grounding_chunks:
             sources = self._format_grounding_chunks_as_sources(grounding_chunks)
             for source in sources:
-                await __event_emitter__({"type": "source", "data": source})
+                await self._emit_optional(
+                    __event_emitter__, {"type": "source", "data": source}
+                )
 
         # Add status specifying google queries used for grounding
         if web_search_queries:
-            await __event_emitter__(
+            await self._emit_optional(
+                __event_emitter__,
                 {
                     "type": "status",
                     "data": {
@@ -4095,7 +5094,7 @@ class Pipe:
                             for query in web_search_queries
                         ],
                     },
-                }
+                },
             )
 
         # Add citations in the text body
@@ -4133,263 +5132,108 @@ class Pipe:
 
     async def _handle_streaming_response(
         self,
-        response_iterator: Any,
-        __event_emitter__: Callable,
-        __request__: Optional[Request] = None,
-        __user__: Optional[dict] = None,
-    ) -> AsyncIterator[Union[str, Dict[str, Any]]]:
-        """
-        Handle streaming response from Gemini API.
-
-        Args:
-            response_iterator: Iterator from generate_content
-            __event_emitter__: Event emitter for status updates
-
-        Returns:
-            Generator yielding text chunks
-        """
-
-        async def emit_chat_event(event_type: str, data: Dict[str, Any]) -> None:
-            if not __event_emitter__:
-                return
-            try:
-                await __event_emitter__({"type": event_type, "data": data})
-            except Exception as emit_error:  # pragma: no cover - defensive
-                self.log.warning(f"Failed to emit {event_type} event: {emit_error}")
-
-        await emit_chat_event("chat:start", {"role": "assistant"})
-
-        grounding_metadata_list = []
-        # Accumulate content separately for answer and thoughts
-        answer_chunks: list[str] = []
-        thought_chunks: list[str] = []
-        function_call_names: list[str] = []
-        thinking_started_at: Optional[float] = None
-        stream_usage_metadata = None
-
+        response_iterator,
+        __event_emitter__,
+        __request__=None,
+        __user__=None,
+        *,
+        request_started_at=None,
+        reasoning_level=None,
+        progress_messages=None,
+        client=None,
+    ):
+        started = request_started_at or time.perf_counter()
+        stop = asyncio.Event()
+        progress = (
+            asyncio.create_task(
+                self._run_progress_timeline(__event_emitter__, progress_messages, stop)
+            )
+            if progress_messages
+            else None
+        )
+        answer, thoughts, grounding, unresolved = [], [], [], []
+        usage = None
+        first = None
         try:
             async for chunk in response_iterator:
-                # Capture usage metadata (final chunk has complete data)
-                if getattr(chunk, "usage_metadata", None):
-                    stream_usage_metadata = chunk.usage_metadata
-
-                # Check for safety feedback or empty chunks
-                if not chunk.candidates:
-                    # Check prompt feedback
-                    if chunk.prompt_feedback and chunk.prompt_feedback.block_reason:
-                        block_reason = chunk.prompt_feedback.block_reason.name
-                        message = f"[Blocked due to Prompt Safety: {block_reason}]"
-                        await emit_chat_event(
-                            "chat:finish",
-                            {
-                                "role": "assistant",
-                                "content": message,
-                                "done": True,
-                                "error": True,
-                            },
+                usage = getattr(chunk, "usage_metadata", None) or usage
+                feedback = getattr(chunk, "prompt_feedback", None)
+                blocked = getattr(feedback, "block_reason", None)
+                if blocked:
+                    yield f"[Blocked due to Prompt Safety: {blocked}]"
+                    return
+                candidates = getattr(chunk, "candidates", None) or []
+                if not candidates:
+                    continue  # Usage-only chunks are not safety blocks.
+                candidate = candidates[0]
+                if getattr(candidate, "grounding_metadata", None):
+                    grounding.append(candidate.grounding_metadata)
+                finish = getattr(candidate, "finish_reason", None)
+                if str(getattr(finish, "value", finish)) in {
+                    "SAFETY",
+                    "PROHIBITED_CONTENT",
+                }:
+                    yield f"[Generation stopped: {finish}]"
+                    return
+                for part in (
+                    getattr(getattr(candidate, "content", None), "parts", None) or []
+                ):
+                    if getattr(part, "function_call", None):
+                        unresolved.append(
+                            getattr(part.function_call, "name", "unknown")
                         )
-                        yield message
-                    else:
-                        message = "[Blocked by safety settings]"
-                        await emit_chat_event(
-                            "chat:finish",
-                            {
-                                "role": "assistant",
-                                "content": message,
-                                "done": True,
-                                "error": True,
-                            },
-                        )
-                        yield message
-                    return  # Stop generation
-
-                if chunk.candidates[0].grounding_metadata:
-                    grounding_metadata_list.append(
-                        chunk.candidates[0].grounding_metadata
-                    )
-                # Prefer fine-grained parts to split thoughts vs. normal text
-                parts = []
-                try:
-                    parts = chunk.candidates[0].content.parts or []
-                except Exception as parts_error:
-                    # Fallback: use aggregated text if parts aren't accessible
-                    self.log.warning(f"Failed to access content parts: {parts_error}")
-                    if hasattr(chunk, "text") and chunk.text:
-                        answer_chunks.append(chunk.text)
-                        await __event_emitter__(
-                            {
-                                "type": "chat:message:delta",
-                                "data": {
-                                    "role": "assistant",
-                                    "content": chunk.text,
-                                },
-                            }
-                        )
-                    continue
-
-                for part in parts:
-                    try:
-                        # Function-call parts can legitimately contain no text.
-                        # They should normally be prevented from entering this
-                        # streaming path by NATIVE_TOOL_STREAMING_SAFE_MODE.
-                        function_call = getattr(part, "function_call", None)
-                        if function_call:
-                            name = (
-                                getattr(function_call, "name", None) or "unknown_tool"
-                            )
-                            function_call_names.append(str(name))
-                            self.log.warning(
-                                "Received function call '%s' in streaming mode without final text yet",
-                                name,
-                            )
-                            continue
-
-                        # Thought parts (internal reasoning)
-                        if getattr(part, "thought", False) and getattr(
-                            part, "text", None
-                        ):
-                            if thinking_started_at is None:
-                                thinking_started_at = time.time()
-                            thought_chunks.append(part.text)
-                            # Emit a live preview of what is currently being thought
-                            preview = part.text.replace("\n", " ").strip()
-                            MAX_PREVIEW = 120
-                            if len(preview) > MAX_PREVIEW:
-                                preview = preview[:MAX_PREVIEW].rstrip() + "…"
-                            await __event_emitter__(
-                                {
-                                    "type": "status",
-                                    "data": {
-                                        "action": "thinking",
-                                        "description": f"Thinking… {preview}",
-                                        "done": False,
-                                        "hidden": False,
-                                    },
-                                }
-                            )
-
-                        # Regular answer text
-                        elif getattr(part, "text", None):
-                            answer_chunks.append(part.text)
-                            await __event_emitter__(
-                                {
-                                    "type": "chat:message:delta",
-                                    "data": {
-                                        "role": "assistant",
-                                        "content": part.text,
-                                    },
-                                }
-                            )
-                    except Exception as part_error:
-                        # Log part processing errors but continue with the stream
-                        self.log.warning(f"Error processing content part: {part_error}")
-                        continue
-
-            # After processing all chunks, handle grounding data
-            final_answer_text = "".join(answer_chunks)
-            if grounding_metadata_list and __event_emitter__:
-                cited = await self._process_grounding_metadata(
-                    grounding_metadata_list,
-                    final_answer_text,
-                    __event_emitter__,
+                    elif getattr(part, "text", None):
+                        if getattr(part, "thought", False):
+                            thoughts.append(part.text)
+                        else:
+                            if first is None:
+                                first = time.perf_counter()
+                                stop.set()
+                                await self._emit_live_progress(
+                                    __event_emitter__, done=True, hidden=True
+                                )
+                            answer.append(part.text)
+                            yield part.text
+            if grounding:
+                await self._process_grounding_metadata(
+                    grounding, "".join(answer), __event_emitter__
                 )
-                final_answer_text = cited or final_answer_text
-
-            final_content = final_answer_text
-            details_block: Optional[str] = None
-
-            if thought_chunks:
-                duration_s = int(
-                    max(0, time.time() - (thinking_started_at or time.time()))
+            if thoughts and self.valves.PROVIDER_THOUGHT_SUMMARY_IN_RESPONSE:
+                details = self._format_provider_thought_details(
+                    "".join(thoughts),
+                    elapsed_s=time.perf_counter() - started,
+                    reasoning_level=reasoning_level,
                 )
-                # Format each line with > for blockquote while preserving formatting
-                thought_content = "".join(thought_chunks).strip()
-                quoted_lines = []
-                for line in thought_content.split("\n"):
-                    quoted_lines.append(f"> {line}")
-                quoted_content = "\n".join(quoted_lines)
-
-                details_block = f"""<details>
-<summary>Thought ({duration_s}s)</summary>
-
-{quoted_content}
-
-</details>""".strip()
-
-            # Never persist a silent empty answer. A function_call part has no
-            # text by design, so surface a diagnostic if it somehow reached the
-            # streaming path instead of the non-streaming safe mode.
-            if not final_answer_text.strip():
-                if function_call_names:
-                    names = ", ".join(dict.fromkeys(function_call_names))
-                    final_answer_text = (
-                        "[Gemini returned a tool call without a final text response "
-                        f"during streaming: {names}. Please retry; native-tool safe mode "
-                        "will use non-streaming generation.]"
-                    )
-                else:
-                    final_answer_text = (
-                        "[Gemini returned an empty streaming response. Please retry.]"
-                    )
-
-            final_content = (
-                f"{details_block}\n\n{final_answer_text}"
-                if details_block
-                else final_answer_text
-            )
-
-            # Ensure downstream consumers (UI, TTS) receive the complete response once streaming ends.
-            await emit_chat_event(
-                "replace", {"role": "assistant", "content": final_content}
-            )
-            await emit_chat_event(
-                "chat:message",
-                {"role": "assistant", "content": final_content, "done": True},
-            )
-
-            if thought_chunks:
-                # Clear the thinking status without a summary in the status emitter
-                await __event_emitter__(
-                    {
-                        "type": "status",
-                        "data": {"action": "thinking", "done": True, "hidden": True},
-                    }
+                if details:
+                    yield "\n\n" + details
+            if not answer:
+                yield (
+                    ("[Unresolved tool call: " + ", ".join(unresolved) + "]")
+                    if unresolved
+                    else "[Gemini returned no answer text]"
                 )
-
-            # Yield usage data as dict so the middleware can extract and save it to DB
-            usage = self._build_usage_dict(stream_usage_metadata)
             if usage:
-                yield {"usage": usage}
-
-            await emit_chat_event(
-                "chat:finish",
-                {"role": "assistant", "content": final_content, "done": True},
+                yield {"usage": self._build_usage_dict(usage)}
+        except Exception as exc:
+            self.log.exception("Streaming failed")
+            yield f"\n[Error during streaming: {exc}]"
+        finally:
+            stop.set()
+            if progress:
+                progress.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await progress
+            close = getattr(response_iterator, "aclose", None)
+            if close:
+                await close()
+            if client is not None:
+                await self._close_client(client)
+            await self._finish_progress_timing(
+                __event_emitter__,
+                started_at=started,
+                reasoning_level=reasoning_level,
+                first_visible_at=first,
             )
-
-            # Yield final content to ensure the async iterator completes properly.
-            # This ensures the response is persisted even if the user navigates away.
-            yield final_content
-
-        except Exception as e:
-            self.log.exception(f"Error during streaming: {e}")
-            # Check if it's a chunk size error and provide specific guidance
-            error_msg = str(e).lower()
-            if "chunk too big" in error_msg or "chunk size" in error_msg:
-                message = "Error: Image too large for processing. Please try with a smaller image (max 15 MB recommended) or reduce image quality."
-            elif "quota" in error_msg or "rate limit" in error_msg:
-                message = "Error: API quota exceeded. Please try again later."
-            else:
-                message = f"Error during streaming: {e}"
-            await emit_chat_event(
-                "chat:finish",
-                {
-                    "role": "assistant",
-                    "content": message,
-                    "done": True,
-                    "error": True,
-                },
-            )
-            yield message
 
     @staticmethod
     def _build_usage_dict(usage_metadata: Any) -> Optional[Dict[str, int]]:
@@ -4422,7 +5266,7 @@ class Pipe:
         candidate = response.candidates[0]
         if candidate.finish_reason == types.FinishReason.SAFETY:
             blocking_rating = next(
-                (r for r in candidate.safety_ratings if r.blocked), None
+                (r for r in (candidate.safety_ratings or []) if r.blocked), None
             )
             reason = f" ({blocking_rating.category.name})" if blocking_rating else ""
             return f"[Blocked by safety settings{reason}]"
@@ -4446,7 +5290,8 @@ class Pipe:
             if not __event_emitter__:
                 return
             try:
-                await __event_emitter__(
+                await self._emit_optional(
+                    __event_emitter__,
                     {
                         "type": "status",
                         "data": {
@@ -4454,7 +5299,7 @@ class Pipe:
                             "description": description,
                             "done": done,
                         },
-                    }
+                    },
                 )
             except Exception as e:
                 self.log.warning(f"Failed to emit video status event: {e}")
@@ -4678,6 +5523,13 @@ class Pipe:
             "choices": [{"message": {"role": "assistant", "content": content}}],
         }
 
+    @staticmethod
+    async def _close_client(client):
+        with contextlib.suppress(Exception):
+            await client.aio.aclose()
+        with contextlib.suppress(Exception):
+            client.close()
+
     async def _retry_with_backoff(self, func, *args, **kwargs) -> Any:
         """
         Retry a function with exponential backoff.
@@ -4721,12 +5573,257 @@ class Pipe:
         assert last_exception is not None
         raise last_exception
 
+    @staticmethod
+    async def _emit_optional(emitter, event):
+        if emitter:
+            try:
+                await emitter(event)
+            except Exception:
+                if event.get("type") == "files":
+                    raise  # Let file-event callers use their Markdown fallback.
+
+    async def _emit_live_progress(
+        self,
+        __event_emitter__: Optional[Callable],
+        description: Optional[str] = None,
+        *,
+        done: bool = False,
+        hidden: bool = False,
+    ) -> None:
+        """Emit one generic Open WebUI status update.
+
+        Intentionally omits a custom ``action`` key. Open WebUI 0.11 renders
+        these generic status events in the same compact timeline style used by
+        the GPT Responses manifold.
+        """
+        if not self.valves.LIVE_PROGRESS_STATUS or not __event_emitter__:
+            return
+        data: Dict[str, Any] = {
+            "done": done,
+            "hidden": hidden,
+        }
+        if description:
+            data["description"] = description
+        try:
+            await self._emit_optional(
+                __event_emitter__, {"type": "status", "data": data}
+            )
+        except Exception as emit_error:
+            self.log.debug("Failed to emit live progress status: %s", emit_error)
+
+    def _progress_timeline_messages(
+        self,
+        *,
+        body: Dict[str, Any],
+        metadata: Optional[Dict[str, Any]],
+        ocr_mode: bool,
+        supports_image_generation: bool,
+        native_tools_active: bool,
+    ) -> List[Tuple[float, str]]:
+        """Build truthful, user-facing waiting messages.
+
+        These messages describe pipeline activity / waiting state only. They are
+        deliberately not presented as Gemini's private reasoning.
+        """
+        prompt = self._last_user_text(body)
+        md = metadata or {}
+        features = md.get("features", {}) or {}
+
+        if supports_image_generation:
+            if self._is_image_edit_request(prompt):
+                return [
+                    (0.0, "원본 이미지를 확인하고 있습니다…"),
+                    (1.8, "이미지 수정 요청을 준비하고 있습니다…"),
+                    (4.5, "Nano Banana 2의 결과를 기다리고 있습니다…"),
+                ]
+            return [
+                (0.0, "이미지 생성 요청을 확인하고 있습니다…"),
+                (1.8, "프롬프트와 이미지 설정을 준비하고 있습니다…"),
+                (4.5, "Nano Banana 2의 결과를 기다리고 있습니다…"),
+            ]
+
+        if ocr_mode:
+            return [
+                (0.0, "첨부 문서를 확인하고 있습니다…"),
+                (1.8, "OCR 전사 조건을 준비하고 있습니다…"),
+                (4.5, "Gemini의 문서 판독 결과를 기다리고 있습니다…"),
+            ]
+
+        explicit_search = bool(features.get("google_search_tool", False))
+        auto_search = bool(
+            self.valves.AUTO_GOOGLE_SEARCH and self._should_auto_google_search(prompt)
+        )
+        file_count, _image_count, _document_count = self._count_request_attachments(
+            body, md
+        )
+
+        messages: List[Tuple[float, str]] = [
+            (0.0, "질문을 읽고 있습니다…"),
+            (1.5, "답변 방향을 준비하고 있습니다…"),
+        ]
+
+        if file_count > 0:
+            messages.append(
+                (3.5, f"첨부 자료 {file_count}개를 함께 확인하고 있습니다…")
+            )
+        elif explicit_search or auto_search:
+            messages.append((3.5, "최신 정보가 필요한지 확인하고 있습니다…"))
+        elif native_tools_active:
+            messages.append((3.5, "필요한 도구 사용을 준비하고 있습니다…"))
+        else:
+            messages.append((3.5, "관련 내용을 정리하고 있습니다…"))
+
+        messages.extend(
+            [
+                (6.0, "Gemini의 응답을 기다리고 있습니다…"),
+                (9.0, "답변을 마무리하고 있습니다…"),
+            ]
+        )
+        return messages
+
+    def _truncate_provider_thought_summary(self, text: str) -> str:
+        clean = str(text or "").strip()
+        limit = int(self.valves.PROVIDER_THOUGHT_SUMMARY_MAX_CHARS)
+        if len(clean) <= limit:
+            return clean
+        return clean[:limit].rstrip() + "…"
+
+    def _format_provider_thought_details(
+        self,
+        thought_text: str,
+        *,
+        elapsed_s: float,
+        reasoning_level: Optional[str],
+    ) -> str:
+        """Format only provider-returned Gemini thought-summary content."""
+        summary = self._truncate_provider_thought_summary(thought_text)
+        if not summary:
+            return ""
+        quoted = "\n".join(f"> {line}" for line in summary.splitlines())
+        level_suffix = f" · {reasoning_level}" if reasoning_level else ""
+        return (
+            "<details>\n"
+            f"<summary>Gemini thought summary · {elapsed_s:.1f}s{level_suffix}</summary>\n\n"
+            f"{quoted}\n\n"
+            "</details>"
+        )
+
+    async def _run_progress_timeline(
+        self,
+        __event_emitter__: Optional[Callable],
+        messages: List[Tuple[float, str]],
+        stop_event: asyncio.Event,
+    ) -> None:
+        """Emit delayed progress messages until first visible model output."""
+        if (
+            not self.valves.LIVE_PROGRESS_STATUS
+            or not self.valves.LIVE_PROGRESS_TIMELINE
+            or not __event_emitter__
+        ):
+            return
+
+        started = time.perf_counter()
+        for delay_s, message in messages:
+            remaining = max(0.0, delay_s - (time.perf_counter() - started))
+            if remaining:
+                try:
+                    await asyncio.wait_for(stop_event.wait(), timeout=remaining)
+                    return
+                except asyncio.TimeoutError:
+                    pass
+            if stop_event.is_set():
+                return
+            await self._emit_live_progress(
+                __event_emitter__,
+                message,
+                done=False,
+                hidden=False,
+            )
+
+    async def _finish_progress_timing(
+        self,
+        __event_emitter__: Optional[Callable],
+        *,
+        started_at: float,
+        reasoning_level: Optional[str],
+        first_visible_at: Optional[float] = None,
+    ) -> None:
+        if not self.valves.LIVE_PROGRESS_STATUS or not __event_emitter__:
+            return
+
+        elapsed = max(0.0, time.perf_counter() - started_at)
+        if self.valves.LIVE_PROGRESS_FINAL_TIMING:
+            level_suffix = f" · {reasoning_level}" if reasoning_level else ""
+            first_suffix = ""
+            if (
+                self.valves.LIVE_PROGRESS_FIRST_TOKEN_TIMING
+                and first_visible_at is not None
+            ):
+                first_elapsed = max(0.0, first_visible_at - started_at)
+                first_suffix = f" · 첫 응답 {first_elapsed:.1f}s"
+            description = (
+                f"Thought for {elapsed:.1f} seconds{level_suffix}{first_suffix}"
+            )
+            await self._emit_live_progress(
+                __event_emitter__,
+                description,
+                done=True,
+                hidden=False,
+            )
+        else:
+            await self._emit_live_progress(
+                __event_emitter__,
+                done=True,
+                hidden=True,
+            )
+
+    def _get_live_progress_description(
+        self,
+        *,
+        body: Dict[str, Any],
+        metadata: Optional[Dict[str, Any]],
+        model_id: str,
+        ocr_mode: bool,
+        supports_image_generation: bool,
+        native_tools_active: bool,
+    ) -> str:
+        """Return a concise Korean status describing the next pipeline stage."""
+        if supports_image_generation:
+            prompt = self._last_user_text(body)
+            if self._is_image_edit_request(prompt):
+                return "원본 이미지를 확인하고 수정 작업을 준비하고 있습니다…"
+            return "이미지 생성 요청을 준비하고 있습니다…"
+
+        if ocr_mode:
+            return "첨부 문서를 확인하고 OCR 전사를 준비하고 있습니다…"
+
+        md = metadata or {}
+        features = md.get("features", {}) or {}
+        explicit_search = bool(features.get("google_search_tool", False))
+        prompt = self._last_user_text(body)
+        auto_search = bool(
+            self.valves.AUTO_GOOGLE_SEARCH and self._should_auto_google_search(prompt)
+        )
+        if explicit_search or auto_search:
+            return "최신 정보를 확인하기 위해 Google Search를 준비하고 있습니다…"
+
+        if native_tools_active:
+            return "요청을 분석하고 필요한 도구 사용을 준비하고 있습니다…"
+
+        file_count, _image_count, _document_count = self._count_request_attachments(
+            body, md
+        )
+        if file_count > 0:
+            return f"첨부 자료 {file_count}개를 확인하고 답변을 준비하고 있습니다…"
+
+        return "요청을 분석하고 답변을 준비하고 있습니다…"
+
     async def pipe(
         self,
         body: Dict[str, Any],
-        __metadata__: dict[str, Any],
-        __event_emitter__: Callable,
-        __tools__: dict[str, Any] | None,
+        __metadata__: Optional[dict[str, Any]] = None,
+        __event_emitter__: Optional[Callable] = None,
+        __tools__: dict[str, Any] | None = None,
         __request__: Optional[Request] = None,
         __user__: Optional[dict] = None,
     ) -> Union[str, Dict[str, Any], AsyncIterator[Union[str, Dict[str, Any]]]]:
@@ -4744,16 +5841,33 @@ class Pipe:
         Returns:
             Response from Google Gemini API, which could be a string or an iterator for streaming.
         """
+        body = copy.deepcopy(body)
+        __metadata__ = {**(body.get("metadata") or {}), **(__metadata__ or {})}
+        last_user = next(
+            (
+                m
+                for m in reversed(body.get("messages") or [])
+                if m.get("role") == "user"
+            ),
+            {},
+        )
+        __metadata__["files"] = (
+            list(__metadata__.get("files") or [])
+            + list(body.get("files") or [])
+            + list(last_user.get("files") or [])
+        )
         # Setup logging for this request
         request_id = id(body)
+        request_started_at = time.perf_counter()
         self.log.debug(f"Processing request {request_id}")
         self.log.debug(f"User request body: {__user__}")
-        if __user__:
-            self.user = await Users.get_user_by_id(__user__["id"])
-        else:
-            self.user = None
-
+        user_token = self._request_user.set(None)
+        nonstream_progress_task = None
+        client = None
+        stream_handed_off = False
         try:
+            if __user__ and __user__.get("id"):
+                self.user = await Users.get_user_by_id(__user__["id"])
             # Parse and validate model ID. Preserve whether the user selected
             # the Open WebUI-only OCR alias before it is mapped to the real API model.
             requested_model_id = body.get("model", "")
@@ -4802,7 +5916,8 @@ class Pipe:
                         )
                         if self.valves.AUTO_IMAGE_ROUTING_STATUS and __event_emitter__:
                             try:
-                                await __event_emitter__(
+                                await self._emit_optional(
+                                    __event_emitter__,
                                     {
                                         "type": "status",
                                         "data": {
@@ -4813,7 +5928,7 @@ class Pipe:
                                             ),
                                             "done": True,
                                         },
-                                    }
+                                    },
                                 )
                             except Exception as emit_error:
                                 self.log.debug(
@@ -4874,7 +5989,8 @@ class Pipe:
                 stream = False
                 if __event_emitter__:
                     try:
-                        await __event_emitter__(
+                        await self._emit_optional(
+                            __event_emitter__,
                             {
                                 "type": "status",
                                 "data": {
@@ -4886,7 +6002,7 @@ class Pipe:
                                     "done": True,
                                     "hidden": True,
                                 },
-                            }
+                            },
                         )
                     except Exception as emit_error:
                         self.log.debug(
@@ -4894,6 +6010,11 @@ class Pipe:
                         )
 
             messages = body.get("messages", [])
+
+            # OCR always sends full attached PDFs; ordinary chat keeps its RAG valve.
+            __metadata__["_google_gemini_ocr_full_pdf"] = (
+                ocr_mode and not is_background_task
+            )
 
             # For image generation models, gather ALL images from the last user turn
             if supports_image_generation:
@@ -4940,7 +6061,8 @@ class Pipe:
                     )
                     if __event_emitter__:
                         try:
-                            await __event_emitter__(
+                            await self._emit_optional(
+                                __event_emitter__,
                                 {
                                     "type": "status",
                                     "data": {
@@ -4952,12 +6074,74 @@ class Pipe:
                                         "done": True,
                                         "hidden": True,
                                     },
-                                }
+                                },
                             )
                         except Exception as emit_error:
                             self.log.debug(
                                 f"Failed to emit OCR mode status: {emit_error}"
                             )
+
+            # Local Auto Thinking Router (v1.21.0)
+            #
+            # Priority:
+            #   1) explicit per-chat reasoning_effort
+            #   2) OCR/image/video dedicated behavior
+            #   3) AUTO_THINKING local heuristic
+            #   4) THINKING_LEVEL valve
+            #   5) Gemini model default
+            #
+            # No extra API call is made for routing.
+            explicit_reasoning_effort = body.get("reasoning_effort")
+            auto_thinking_reason = None
+            if (
+                self.valves.AUTO_THINKING
+                and not explicit_reasoning_effort
+                and not ocr_mode
+                and not supports_image_generation
+                and not is_background_task
+                and self._is_auto_thinking_candidate_model(model_id)
+            ):
+                auto_level, auto_thinking_reason = self._select_auto_thinking_level(
+                    body, model_id, __metadata__
+                )
+                if auto_level:
+                    body["reasoning_effort"] = auto_level
+                    body["_google_auto_thinking"] = True
+                    body["_google_auto_thinking_reason"] = auto_thinking_reason
+                    self.log.info(
+                        "Auto Thinking: model=%s level=%s (%s)",
+                        model_id,
+                        auto_level,
+                        auto_thinking_reason,
+                    )
+                    if (
+                        self.valves.AUTO_THINKING_SHOW_STATUS
+                        and not self.valves.LIVE_PROGRESS_STATUS
+                        and __event_emitter__
+                    ):
+                        try:
+                            await self._emit_optional(
+                                __event_emitter__,
+                                {
+                                    "type": "status",
+                                    "data": {
+                                        "action": "auto_thinking",
+                                        "description": (f"Auto Thinking: {auto_level}"),
+                                        "done": True,
+                                        "hidden": False,
+                                    },
+                                },
+                            )
+                        except Exception as emit_error:
+                            self.log.debug(
+                                "Failed to emit Auto Thinking status: %s",
+                                emit_error,
+                            )
+            elif explicit_reasoning_effort:
+                self.log.debug(
+                    "Auto Thinking bypassed: explicit reasoning_effort=%s",
+                    explicit_reasoning_effort,
+                )
 
             # Configure generation parameters and safety settings
             self.log.debug(f"Supports image generation: {supports_image_generation}")
@@ -4971,7 +6155,31 @@ class Pipe:
                 model_id,
             )
 
-            # Make the API call
+            selected_reasoning_level = (
+                self.valves.OCR_THINKING_LEVEL
+                if ocr_mode
+                else body.get("reasoning_effort") or self.valves.THINKING_LEVEL or None
+            )
+            progress_messages = self._progress_timeline_messages(
+                body=body,
+                metadata=__metadata__,
+                ocr_mode=ocr_mode,
+                supports_image_generation=supports_image_generation,
+                native_tools_active=native_tools_active,
+            )
+            if (
+                self.valves.LIVE_PROGRESS_SHOW_THINKING_LEVEL
+                and selected_reasoning_level
+                and progress_messages
+                and not supports_image_generation
+            ):
+                delay0, msg0 = progress_messages[0]
+                progress_messages[0] = (
+                    delay0,
+                    f"{msg0.rstrip('…')} · 추론 수준: {selected_reasoning_level}…",
+                )
+
+            # Make the API call.
             client = self._get_client()
             if stream:
                 # For image generation models, disable streaming to avoid chunk size issues
@@ -4994,8 +6202,16 @@ class Pipe:
                             get_streaming_response
                         )
                         self.log.debug(f"Request {request_id}: Got streaming response")
+                        stream_handed_off = True
                         return self._handle_streaming_response(
-                            response_iterator, __event_emitter__, __request__, __user__
+                            response_iterator,
+                            __event_emitter__,
+                            __request__,
+                            __user__,
+                            request_started_at=request_started_at,
+                            reasoning_level=selected_reasoning_level,
+                            progress_messages=progress_messages,
+                            client=client,
                         )
 
                     except Exception as e:
@@ -5015,12 +6231,23 @@ class Pipe:
                             config=generation_config,
                         )
 
-                    # Measure duration for non-streaming path (no status to avoid false indicators)
+                    # Measure duration for non-streaming path.
                     start_ts = time.time()
+                    nonstream_progress_stop = asyncio.Event()
+                    nonstream_progress_task: Optional[asyncio.Task] = None
+                    if progress_messages:
+                        nonstream_progress_task = asyncio.create_task(
+                            self._run_progress_timeline(
+                                __event_emitter__,
+                                progress_messages,
+                                nonstream_progress_stop,
+                            )
+                        )
 
                     # Send processing status for image generation
                     if supports_image_generation:
-                        await __event_emitter__(
+                        await self._emit_optional(
+                            __event_emitter__,
                             {
                                 "type": "status",
                                 "data": {
@@ -5028,11 +6255,16 @@ class Pipe:
                                     "description": "Processing image request...",
                                     "done": False,
                                 },
-                            }
+                            },
                         )
 
                     try:
-                        response = await self._retry_with_backoff(get_response)
+                        # AFC can execute a state-changing tool before a later API failure.
+                        response = (
+                            await get_response()
+                            if native_tools_active
+                            else await self._retry_with_backoff(get_response)
+                        )
                     except ClientError as first_client_error:
                         # Compatibility safety net for older google-genai builds.
                         # If the SDK still fails to transmit Gemini 3 tool-context
@@ -5042,6 +6274,9 @@ class Pipe:
                             explicit_search_requested = bool(
                                 ((__metadata__ or {}).get("features", {}) or {}).get(
                                     "google_search_tool", False
+                                )
+                                or ((__metadata__ or {}).get("features", {}) or {}).get(
+                                    "web_search", False
                                 )
                             )
                             if explicit_search_requested:
@@ -5087,11 +6322,10 @@ class Pipe:
                                     config=fallback_config,
                                 )
 
-                            response = await self._retry_with_backoff(
-                                get_fallback_response
-                            )
+                            response = await get_fallback_response()
                             try:
-                                await __event_emitter__(
+                                await self._emit_optional(
+                                    __event_emitter__,
                                     {
                                         "type": "status",
                                         "data": {
@@ -5099,17 +6333,26 @@ class Pipe:
                                             "description": fallback_description,
                                             "done": True,
                                         },
-                                    }
+                                    },
                                 )
                             except Exception:
                                 pass
                         else:
                             raise
                     self.log.debug(f"Request {request_id}: Got non-streaming response")
+                    nonstream_progress_stop.set()
+                    if nonstream_progress_task:
+                        nonstream_progress_task.cancel()
+                    await self._emit_live_progress(
+                        __event_emitter__,
+                        done=True,
+                        hidden=True,
+                    )
 
                     # Clear processing status for image generation
                     if supports_image_generation:
-                        await __event_emitter__(
+                        await self._emit_optional(
+                            __event_emitter__,
                             {
                                 "type": "status",
                                 "data": {
@@ -5117,7 +6360,7 @@ class Pipe:
                                     "description": "Processing complete",
                                     "done": True,
                                 },
-                            }
+                            },
                         )
 
                     # Handle "Thinking" and produce final formatted content
@@ -5248,23 +6491,24 @@ class Pipe:
                     # Combine all content
                     full_response = ""
 
-                    # If we have thoughts, wrap them using <details>
-                    if thought_segments:
-                        duration_s = int(max(0, time.time() - start_ts))
-                        # Format each line with > for blockquote while preserving formatting
+                    # If Gemini explicitly returned provider thought-summary parts,
+                    # preserve them in a collapsed block. Never synthesize a hidden
+                    # reasoning trace when the API returned none.
+                    if (
+                        thought_segments
+                        and self.valves.PROVIDER_THOUGHT_SUMMARY_IN_RESPONSE
+                    ):
                         thought_content = "".join(thought_segments).strip()
-                        quoted_lines = []
-                        for line in thought_content.split("\n"):
-                            quoted_lines.append(f"> {line}")
-                        quoted_content = "\n".join(quoted_lines)
-
-                        details_block = f"""<details>
-<summary>Thought ({duration_s}s)</summary>
-
-{quoted_content}
-
-</details>""".strip()
-                        full_response += details_block
+                        details_block = self._format_provider_thought_details(
+                            thought_content,
+                            elapsed_s=max(
+                                0.0,
+                                time.perf_counter() - request_started_at,
+                            ),
+                            reasoning_level=selected_reasoning_level,
+                        )
+                        if details_block:
+                            full_response += details_block + "\n\n"
 
                     # Add the main answer
                     full_response += final_answer
@@ -5293,6 +6537,13 @@ class Pipe:
                         if full_response:
                             full_response += "\n\n"
                         full_response += "\n\n".join(generated_images)
+
+                    await self._finish_progress_timing(
+                        __event_emitter__,
+                        started_at=request_started_at,
+                        reasoning_level=selected_reasoning_level,
+                        first_visible_at=None,
+                    )
 
                     # Build response with usage for middleware to extract and save to DB
                     usage = self._build_usage_dict(
@@ -5344,3 +6595,12 @@ class Pipe:
 
             # Return a user-friendly error message
             return f"An error occurred while processing your request: {e}"
+
+        finally:
+            if nonstream_progress_task:
+                nonstream_progress_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await nonstream_progress_task
+            self._request_user.reset(user_token)
+            if client is not None and not stream_handed_off:
+                await self._close_client(client)

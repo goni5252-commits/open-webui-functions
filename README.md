@@ -11,7 +11,7 @@ OpenWebUI 대화에서 **학교 양식으로 HWPX를 작성하고, 디자인을 
 | 다운로드 | 용도 |
 |---|---|
 | [OpenAI Responses v1.7.9 JSON](function-openai_responses-v1.7.9.json) · [직접 다운로드](https://raw.githubusercontent.com/goni5252-commits/open-webui-functions/main/function-openai_responses-v1.7.9.json) | 이 안내에서 사용하는 함수 |
-| [Google Gemini JSON](function-google_gemini.json) | 별도 Gemini 함수 |
+| [Google Gemini v1.23.6 JSON](function-google_gemini.json) | 별도 Gemini 함수 |
 | [Gemini RAG Bypass JSON](function-google_gemini_rag_bypass.json) | 별도 RAG Bypass 함수 |
 
 [변경 내역](CHANGELOG.md) · [OpenAI 함수 Python 원본](functions/openai_responses.py)
