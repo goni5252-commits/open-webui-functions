@@ -4,10 +4,10 @@ description: Open Terminal에서 편집 가능한 PPTX를 만들거나 수정하
 ---
 # PPT 제작
 
-하네스 루트는 이 파일에서 `../..`입니다. 사용자별 쓰기 가능한 작업 경로를 확인하고 요청마다 새 작업 폴더를 만듭니다. 하네스 폴더는 수정하지 않습니다.
+공통 AGENTS.md의 workspace 명령으로 사용자별 새 작업 폴더를 만듭니다. 스크립트·예제는 core 루트 기준입니다. 하네스 폴더는 수정하지 않습니다.
 
 1. 내용·대상·장수·사용자 제공 PPTX를 확인합니다. 원본 템플릿이 필요한 경우 첨부 전달 도구로 원본을 가져옵니다. 없는 경로나 파일을 추측하지 않습니다.
-2. 명명된 웹사이트 스타일 또는 DESIGN.md 요청이면 `../design-md/SKILL.md`, 이어 `../ppt-design-adapter/SKILL.md`를 읽습니다. 디자인 요청이 없으면 외부 파일을 다운로드할 필요가 없습니다.
+2. 명명된 웹사이트 스타일 또는 DESIGN.md 요청이면 catalog에서 design-md, 이어 ppt-design-adapter의 entrypoint를 읽습니다. 디자인 요청이 없으면 외부 파일을 다운로드할 필요가 없습니다.
 3. `scripts/doctor.py` 결과를 참고하여 실제 설치된 글꼴·라이브러리를 선택합니다. 글꼴 설치는 공통 서버 설정이므로 누락 시 사용자에게 필요한 설치를 안내합니다.
 4. 내용에 맞는 슬라이드를 설계하고 작업 폴더에 `ppt-theme.json`, `slides.json`을 작성합니다. 예시 구조는 `examples/theme.json`, `examples/slides.json`입니다.
 5. 기본 제목/본문/카드 레이아웃은 `python3 <root>/scripts/build_pptx.py --theme <theme.json> --slides <slides.json> --output <새 파일.pptx>`로 생성할 수 있습니다. 표·차트·기존 템플릿 편집·특수 레이아웃은 설치된 python-pptx/PptxGenJS로 별도 스크립트를 작성합니다. 기본 빌더가 임의의 디자인을 완벽하게 재현하는 것은 아닙니다.

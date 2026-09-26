@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "version": "1.1.0",
+  "skills": [
+    {"id":"presentation", "description":"편집 가능한 PPTX 생성·수정·검증·파일 카드 전달", "entrypoint":"skills/presentation/SKILL.md", "enabled":true, "needs":["design-md", "ppt-design-adapter"]},
+    {"id":"design-md", "description":"getdesign.md 또는 첨부 DESIGN.md를 시각 참조로 준비", "entrypoint":"skills/design-md/SKILL.md", "enabled":true},
+    {"id":"ppt-design-adapter", "description":"디자인 참조를 PPT 테마와 레이아웃으로 해석", "entrypoint":"skills/ppt-design-adapter/SKILL.md", "enabled":true},
+    {"id":"hwpx", "description":"kordoc을 사용한 HWP/HWPX 읽기·양식 채우기·편집·검증", "entrypoint":"skills/hwpx/SKILL.md", "enabled":true},
+    {"id":"family-letter-generator", "description":"학교 가정통신문 원본 양식으로 HWPX 작성", "entrypoint":"skills/family-letter-generator/SKILL.md", "enabled":true, "needs":["hwpx"]},
+    {"id":"regulation-comparison-generator", "description":"개정 전·후 규정의 구조를 비교하여 신구대조표 양식 작성", "entrypoint":"skills/regulation-comparison-generator/SKILL.md", "enabled":true, "needs":["hwpx"]}
+  ]
+}

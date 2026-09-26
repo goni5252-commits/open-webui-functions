@@ -1,5 +1,15 @@
 # 업데이트 내역
 
+## 2026-09-26 — OpenAI Responses v1.7.8 / 공통 하네스 1.1.0
+
+- 특정 PPT 기능 연결을 공통 AGENTS.md·core/site catalog 기반으로 확장했습니다. core는 버전별 공통 자산, site는 학교 지침·양식, workspace는 실제 실행 계정별 작업 폴더입니다. 새 스킬은 목록 등록으로 확장합니다.
+- ENABLE_TERMINAL_HARNESS, TERMINAL_HARNESS_ENTRYPOINT, TERMINAL_HARNESS_SITE_ROOT를 추가했습니다. 기존 ENABLE_PRESENTATION_DESIGN의 꺼짐 설정도 보존하여 이전하고 명시적 새 설정을 우선합니다. 기본 진입점은 AGENTS.md, INDEX.md는 호환 안내로 유지합니다.
+- 학교 스킬의 명시적 override/비활성화, 중복·누락·외부 경로 검증, 비파괴 site 초기화 및 실제 OS 계정 기준 작업 폴더 생성 스크립트를 추가했습니다. 사용자 ID/HOME 입력으로 타인 홈을 선택하지 않습니다.
+- kordoc/HWPX·가정통신문·규정 신구대조표의 새 기본 지침을 추가했습니다. 기존 개인 스킬의 실제 내용은 아직 확보하지 못했으므로 동일 구현이라고 주장하지 않습니다. 원본 보존·관리자 검토·site 등록 이전 절차와 전체 사용자 접근 권한/두 계정 확인 절차를 제공합니다.
+- 실제 학교 양식·개인정보·비밀값은 배포에 포함하지 않습니다. 기존 1.0.0 ZIP 및 과거 함수 JSON은 유지합니다. 공통 하네스는 사용 권한을 부여하거나 사용자 간 보안 격리를 구현하지 않습니다.
+- 검증: 오프라인 테스트 77개, core/site 목록의 명시적 대체·비활성화·확장, 누락 양식·외부 심볼릭 링크 거부, 기존 site 보존, 모의 두 계정의 작업 경로 분리, 설정 이전 및 기존 PPT/진행 표시/첨부 회귀 검사. 스킬 구조·배포 JSON·ZIP/SHA-256을 검증했습니다.
+- 한계: 실제 OpenWebUI 일반 사용자 계정/서버 설치, 기존 kordoc 지침 원문 이전, 실제 학교 HWPX 양식 출력 및 getdesign 네트워크 다운로드는 미검증입니다. 서버 배포는 설치 안내에 따라 별도로 수행해야 합니다.
+
 ## 2026-09-25 — OpenAI Responses v1.7.7 / Terminal 하네스 1.0.0
 
 - 함수의 상세 PPT 제작 지침과 생성용 다운로드 명령을 제거하고, Terminal의 INDEX.md를 읽도록 안내하는 `get_terminal_harness`로 교체했습니다. 하네스 ZIP·SHA-256·Windows/WSL2 Compose 마운트 안내를 제공합니다.

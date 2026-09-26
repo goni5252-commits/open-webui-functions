@@ -15,7 +15,7 @@ has_changelog=false
 for path in "$@"; do
   case "$path" in
     CHANGELOG.md) has_changelog=true ;;
-    README.md|AGENTS.md|.gitignore|functions/*.py|function-*.json|scripts/*.py|scripts/*.sh|tests/*.py|harness/open-terminal/*.md|harness/open-terminal/skills/*/SKILL.md|harness/open-terminal/scripts/*.py|harness/open-terminal/examples/*.json|harness/open-terminal-harness-v*.zip|harness/open-terminal-harness-v*.zip.sha256) ;;
+    README.md|AGENTS.md|.gitignore|functions/*.py|function-*.json|scripts/*.py|scripts/*.sh|tests/*.py|harness/open-terminal/*.md|harness/open-terminal/*.json|harness/open-terminal/skills/*/SKILL.md|harness/open-terminal/scripts/*.py|harness/open-terminal/examples/*.json|harness/open-terminal-harness-v*.zip|harness/open-terminal-harness-v*.zip.sha256) ;;
     *) echo "Unsupported publish path: $path" >&2; exit 1 ;;
   esac
   case "$path" in *..*|/*) echo 'Use repository-relative file paths.' >&2; exit 1 ;; esac

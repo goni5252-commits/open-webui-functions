@@ -6,7 +6,7 @@ from zipfile import ZipFile, ZipInfo, ZIP_DEFLATED
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / 'harness/open-terminal'
-ARCHIVE = ROOT / 'harness/open-terminal-harness-v1.0.0.zip'
+ARCHIVE = ROOT / 'harness/open-terminal-harness-v1.1.0.zip'
 DIGEST = ARCHIVE.with_suffix('.zip.sha256')
 
 

@@ -6,7 +6,7 @@ import subprocess
 
 
 def inspect():
-    commands = {name: shutil.which(name) for name in ('python3', 'node', 'npm', 'npx', 'fc-list', 'libreoffice', 'pdftoppm')}
+    commands = {name: shutil.which(name) for name in ('python3', 'node', 'npm', 'npx', 'fc-list', 'libreoffice', 'pdftoppm', 'kordoc')}
     fonts = []
     if commands['fc-list']:
         result = subprocess.run(['fc-list', ':lang=ko', 'family'], capture_output=True, text=True, timeout=15)

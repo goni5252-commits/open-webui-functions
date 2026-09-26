@@ -4,7 +4,7 @@ Open WebUI에서 사용할 수 있는 함수를 공유합니다.
 
 | 함수 | 편집 원본 | 배포 파일 |
 | --- | --- | --- |
-| OpenAI Responses | [Python](functions/openai_responses.py) | [v1.7.7 JSON](function-openai_responses-v1.7.7.json) |
+| OpenAI Responses | [Python](functions/openai_responses.py) | [v1.7.8 JSON](function-openai_responses-v1.7.8.json) |
 | Google Gemini | [Python](functions/google_gemini.py) | [JSON](function-google_gemini.json) |
 | Gemini RAG Bypass | [Python](functions/google_gemini_rag_bypass.py) | [JSON](function-google_gemini_rag_bypass.json) |
 
@@ -15,30 +15,28 @@ Open WebUI에서 사용할 수 있는 함수를 공유합니다.
 OpenWebUI를 통해 OpenAI ChatGPT 및 Google Gemini API를 연결, 소규모 자체 LLM 서버를 운영하기 위해 만든 함수들을 공유합니다.
 
 
-## Open Terminal 하네스 기반 PPT 제작 (Responses v1.7.7)
+## 모든 사용자용 공통 하네스 (Responses v1.7.8 / Harness 1.1.0)
 
-상세 제작 지침을 함수에서 분리했습니다. **함수 JSON과 Terminal 하네스 패키지를 함께 적용**하세요.
+공통 `AGENTS.md → catalog.json → 필요한 SKILL.md` 구조입니다. 새 기능을 catalog에 등록하면 함수에 기능별 지침을 추가하지 않아도 됩니다. 실제 적용 범위는 모델/관리자 Terminal 연결 권한을 가진 사용자입니다.
 
-- [하네스 1.0.0 ZIP](harness/open-terminal-harness-v1.0.0.zip) · [SHA-256](harness/open-terminal-harness-v1.0.0.zip.sha256)
-- [Windows / WSL2 / Docker 설치·이전 안내](harness/open-terminal/INSTALL.md)
-- [하네스 원본](harness/open-terminal) · [작업 목록](harness/open-terminal/INDEX.md)
+| 계층 | 기본 경로 | 내용 |
+|---|---|---|
+| core | `/opt/openwebui-harness` | 공개 공통 지침·스킬·스크립트, 읽기 전용 |
+| site | `/opt/openwebui-site` | 학교 내부 공통 지침·기존 스킬·양식, 읽기 전용 |
+| workspace | 현재 OS 계정 홈 아래 `.openwebui-workspaces/task-*` | 요청별 원본 복사본·중간 파일·결과 |
 
-권장 구성은 서버의 버전별 하네스 폴더를 Terminal의 `/opt/openwebui-harness`에 읽기 전용으로 bind mount하는 것입니다. 기존 사용자 데이터 볼륨은 유지하고 결과물은 사용자별 작업 폴더에 저장합니다.
+- **[하네스 ZIP](harness/open-terminal-harness-v1.1.0.zip)** · [SHA-256](harness/open-terminal-harness-v1.1.0.zip.sha256)
+- **[설치·전체 사용자 적용 안내](harness/open-terminal/INSTALL.md)**
+- **[기존 개인 kordoc 지침 이전](harness/open-terminal/MIGRATION.md)**
+- [새 기능 추가 규약](harness/open-terminal/EXTENDING.md) · [공통 진입점](harness/open-terminal/AGENTS.md)
 
-`ENABLE_PRESENTATION_DESIGN=True`(이름은 기존 설정 호환), `TERMINAL_HARNESS_ROOT=/opt/openwebui-harness`를 설정합니다.
-새 `get_terminal_harness`는 INDEX.md 읽기 명령만 반환하며, 설치 확인이나 파일 읽기를 함수 서버에서 하지 않습니다.
-모델이 Terminal을 통해 INDEX와 필요한 지침을 읽고 실행합니다. 하네스가 없으면 설치 필요를 알리도록 안내합니다.
+PPT / getdesign 참조 / PPT 테마 변환 / HWPX / 가정통신문 / 규정 신구대조표의 여섯 기본 스킬을 포함합니다.
+가정통신문·신구대조표 지침은 새 공통 기본 지침입니다. 기존 서버의 실제 지침을 복제한 것은 아니므로 MIGRATION 안내에 따라 검토 후 site override로 등록하세요. 실제 학교 양식이나 개인정보는 패키지에 포함하지 않습니다.
 
-패키지에는 PPT 제작 / 디자인 참조 / PPT 디자인 변환의 세 SKILL과 환경 진단, 격리된 getdesign 다운로드, 기본 편집형 PPTX 빌더, 구조·경계 검증 스크립트 및 예제가 있습니다.
-모델이 DESIGN.md 의미를 해석하여 테마를 만듭니다. 고정 파서가 모든 웹 디자인을 자동 재현하는 기능은 아닙니다.
-기본 빌더에는 python-pptx, 다운로드에는 Node/npm/npx가 필요합니다. 패키지나 글꼴을 자동 설치하지 않습니다.
-학교 HWPX/PDF 제작 기능은 이번 하네스에 포함하지 않았습니다.
+학교 site는 core 업데이트와 별도로 유지됩니다. site catalog는 명시적 override와 기능 비활성화를 지원하며 중복 ID·외부 경로·누락 파일을 검사합니다. 동작하는 함수 서버에서 Terminal 파일을 직접 읽지 않고 모델이 Terminal 도구로 필요한 지침을 읽습니다.
 
-예시: `getdesign.md의 Claude 스타일로 인공지능 활용 연수 PPT 5장을 만들어줘. 설치된 Terminal 하네스를 읽고 PPTX 파일 카드로 제공해줘.`
+설정: `ENABLE_TERMINAL_HARNESS=True`, `TERMINAL_HARNESS_ROOT=/opt/openwebui-harness`, `TERMINAL_HARNESS_ENTRYPOINT=AGENTS.md`, `TERMINAL_HARNESS_SITE_ROOT=/opt/openwebui-site`.
+이전 `ENABLE_PRESENTATION_DESIGN` 값은 새 이름으로 이전되며 새 값이 있으면 우선합니다. 하네스 패키지와 함수 JSON을 함께 업데이트하세요.
 
-`COMPACT_STATUS_UPDATES=True`는 진행 상태의 긴 도구 인자·결과를 줄입니다. 실제 모델에 전달되는 도구 결과와 파일 카드는 그대로 유지됩니다.
-created/in_progress의 같은 대기 문구는 제거했고, 기본 모드에서는 도구 후속 요청마다 대기 문구를 다시 쌓지 않습니다.
-45초간 표시 활동이 없을 때 같은 대기 구간에서 한 번 안내합니다. 상세 모드(False)에서도 한 API 요청의 lifecycle 중복은 제거됩니다.
-이전에 저장된 대화 상태 기록은 수정하지 않습니다.
-
-검증은 오프라인 회귀 및 로컬 PPTX 생성/구조 검사 범위입니다. 실제 OpenWebUI/Windows/WSL2 서비스, CLI 네트워크 다운로드와 렌더링 시각 품질은 서버 적용 후 확인해야 합니다.
+v1.7.7의 대기 문구 중복 제거, `COMPACT_STATUS_UPDATES`, 첨부 원본 전달, 파일 카드 처리는 유지합니다.
+공유 컨테이너의 사용자별 홈은 강한 사용자 간 보안 경계가 아닙니다. 실제 전체 사용자 연결/격리는 서버 운영 구성으로 확인해야 합니다. 다른 모델 함수에는 같은 진입점 읽기 연결이 별도로 필요합니다.
