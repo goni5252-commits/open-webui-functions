@@ -52,7 +52,9 @@ def load_gemini_helpers():
     constants = [n for n in tree.body if isinstance(n, ast.AnnAssign)
                  and isinstance(n.target, ast.Name) and n.target.id.endswith('_OPTIONS')]
     future = ast.ImportFrom(module='__future__', names=[ast.alias(name='annotations')], level=0)
-    exec(compile(ast.fix_missing_locations(ast.Module(body=[common], type_ignores=[])), str(path), 'exec'), ns)
+    # Reproduce dynamic loaders inheriting postponed annotations. The previous
+    # test compiled this helper separately without that flag and missed AFC failure.
+    exec(compile(ast.fix_missing_locations(ast.Module(body=[future, common], type_ignores=[])), str(path), 'exec'), ns)
     exec(compile(ast.fix_missing_locations(ast.Module(body=[future] + constants + [pipe], type_ignores=[])), str(path), 'exec'), ns)
     ns['Pipe'].Valves.model_rebuild(_types_namespace=ns)
     return ns['Pipe'], ns['_ConversationImages']
@@ -339,6 +341,28 @@ class GeminiImageIntegrationTests(unittest.IsolatedAsyncioTestCase):
         text = contents[0]['parts'][0]['text']
         self.assertIn('Keep the brand style.', text)
         self.assertIn('Preserve all visual details', text)
+
+    def test_deferred_annotations_resolved_without_mutating_original(self):
+        session, _ = ImageSessionTests().session(GeminiImages)
+        before = inspect.signature(session.run)
+        self.assertIsInstance(before.parameters['prompt'].annotation, str)
+        tool = Gemini._named_native_tool('conversation_image', session.run, set())
+        signature = inspect.signature(tool)
+        self.assertIs(signature.parameters['prompt'].annotation, str)
+        self.assertEqual(signature.parameters['reference_ids'].annotation, list[str])
+        self.assertIs(signature.return_annotation, dict)
+        self.assertIs(tool.__annotations__['prompt'], str)
+        self.assertEqual(inspect.signature(session.run), before)
+
+    def test_concrete_annotations_and_unresolved_types(self):
+        async def plain(value: int = 1) -> str:
+            return str(value)
+        tool = Gemini._named_native_tool('plain', plain, set())
+        self.assertEqual(inspect.signature(tool), inspect.signature(plain))
+        namespace = {}
+        exec("async def invalid(value: 'MissingToolType'): pass", namespace)
+        with self.assertRaisesRegex(ValueError, 'Cannot resolve Gemini tool parameter types for invalid'):
+            Gemini._named_native_tool('invalid', namespace['invalid'], set())
 
     async def test_sdk_callable_schema_and_dispatch(self):
         try:

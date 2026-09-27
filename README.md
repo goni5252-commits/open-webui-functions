@@ -13,7 +13,7 @@ OpenWebUI 대화에서 **학교 양식으로 HWPX를 작성하고, 디자인을 
 | [OpenAI Responses v1.8.0 JSON](function-openai_responses-v1.8.0.json) · [직접 다운로드](https://raw.githubusercontent.com/goni5252-commits/open-webui-functions/main/function-openai_responses-v1.8.0.json) | 이 안내에서 사용하는 함수 |
 | [엑셀 내보내기 v0.4.0 JSON](function-엑셀로_내보내기-v0.4.0.json) | 답변의 Markdown 표를 XLSX로 저장하는 Action (Open WebUI 0.11.4+) |
 | [한글 내보내기 v3.4.0 JSON](function-한글문서_내보내기-v3.4.0.json) | 기존 답변을 HWPX로 저장하는 Action (Open WebUI 0.11.4+) |
-| [Google Gemini v1.24.0 JSON](function-google_gemini-v1.24.0.json) | 별도 Gemini 함수 |
+| [Google Gemini v1.24.1 JSON](function-google_gemini-v1.24.1.json) | 별도 Gemini 함수 |
 | [Gemini RAG Bypass JSON](function-google_gemini_rag_bypass.json) | 별도 RAG Bypass 함수 |
 
 [변경 내역](CHANGELOG.md) · [OpenAI 함수 Python 원본](functions/openai_responses.py)
@@ -276,7 +276,7 @@ Open WebUI **0.11.4 이상**을 대상으로 합니다. 기존 함수와 설정�
 
 ## 8. 대화 중 이미지 생성·수정
 
-OpenAI Responses **v1.8.0**, Google Gemini **v1.24.0**부터 일반 대화 모델을 선택한 채 이미지 생성·수정을 요청할 수 있습니다. 두 함수의 최신 JSON을 각각 가져오고 활성화하세요. 별도 OpenWebUI 이미지 엔진이나 Terminal 설정은 필요하지 않습니다. GitHub 파일 업데이트가 서버에 설치된 함수를 자동 갱신하지는 않습니다.
+OpenAI Responses **v1.8.0**, Google Gemini **v1.24.1**부터 일반 대화 모델을 선택한 채 이미지 생성·수정을 요청할 수 있습니다. 두 함수의 최신 JSON을 각각 가져오고 활성화하세요. 별도 OpenWebUI 이미지 엔진이나 Terminal 설정은 필요하지 않습니다. GitHub 파일 업데이트가 서버에 설치된 함수를 자동 갱신하지는 않습니다.
 
 | 설정 | OpenAI | Gemini |
 |---|---|---|

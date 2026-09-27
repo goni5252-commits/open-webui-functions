@@ -4,10 +4,13 @@ author: owndev and olivier-lacroix. editied by goni5252
 author_url: https://github.com/owndev/
 project_url: https://github.com/owndev/Open-WebUI-Functions
 funding_url: https://github.com/sponsors/owndev
-version: 1.24.0
+version: 1.24.1
 required_open_webui_version: 0.9.0
 license: Apache License 2.0
 description: Google Gemini pipeline with Gemini 3.7 support, local Auto Thinking routing, automatic Google Search grounding, Nano Banana 2 image routing/editing, OCR, RAG bypass, and robust tool handling.
+changes_1_24_1:
+  - Resolve deferred callable annotations before Gemini SDK argument conversion
+  - Preserve callable signatures without mutating shared tool functions
 changes_1_24_0:
   - Conversational image tool with explicit original/reference selection and branch-local history
   - Original image bytes, authorized file persistence, bounded calls and no paid-call retry
@@ -4489,8 +4492,31 @@ class Pipe:
         named_tool.__name__ = api_name
         named_tool.__qualname__ = api_name
         named_tool.__doc__ = getattr(tool, "__doc__", None) or original_name
-        named_tool.__annotations__ = dict(getattr(tool, "__annotations__", {}) or {})
-        named_tool.__signature__ = inspect.signature(tool)
+        signature = inspect.signature(tool)
+        annotations = dict(getattr(tool, "__annotations__", {}) or {})
+        if any(isinstance(p.annotation, str) for p in signature.parameters.values()) or isinstance(signature.return_annotation, str):
+            # Dynamic exec loaders may inherit postponed annotations. Schema
+            # discovery accepts strings, but SDK AFC argument conversion can pass
+            # them to isinstance(). Resolve against the ORIGINAL callable globals,
+            # then replace __signature__ as well as __annotations__ on our wrapper.
+            from typing import get_type_hints
+            try:
+                resolved = get_type_hints(tool)
+                parameters = []
+                for parameter in signature.parameters.values():
+                    annotation = resolved.get(parameter.name, parameter.annotation)
+                    if isinstance(annotation, str):
+                        raise TypeError(f"Unresolved annotation for {parameter.name}")
+                    parameters.append(parameter.replace(annotation=annotation))
+                return_annotation = resolved.get("return", signature.return_annotation)
+                if isinstance(return_annotation, str):
+                    raise TypeError("Unresolved return annotation")
+                signature = signature.replace(parameters=parameters, return_annotation=return_annotation)
+                annotations.update(resolved)
+            except (NameError, TypeError, ValueError) as exc:
+                raise ValueError(f"Cannot resolve Gemini tool parameter types for {api_name}: {exc}") from exc
+        named_tool.__annotations__ = annotations
+        named_tool.__signature__ = signature
         return named_tool
 
     def _configure_generation(

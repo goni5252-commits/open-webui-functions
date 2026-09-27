@@ -1,5 +1,14 @@
 # 업데이트 내역
 
+## 2026-09-27 — Google Gemini v1.24.1
+
+- 이미지 도구 실행 전 `isinstance() arg 2 must be a type, a tuple of types, or a union`으로 실패하는 조건을 재현하고 수정했습니다. 동적 로딩에서 문자열로 남은 함수 타입 주석을 Google SDK가 인자 변환에 사용하면서 생기는 오류입니다.
+- 원래 callable의 전역 문맥에서 타입을 해석하고 요청별 래퍼의 `__annotations__`와 `__signature__`를 함께 갱신합니다. 공유 원본 callable은 변경하지 않습니다. 해석할 수 없는 타입은 도구명과 함께 명확한 구성 오류로 안내합니다.
+- 이전 테스트는 이미지 helper만 지연 주석 없이 별도 컴파일하여 이 조건을 놓쳤습니다. helper에도 지연 주석을 적용하도록 바꾸고, 실제 Google SDK 자동 도구 호출 루프에서 실패 재현 후 수정 성공을 확인했습니다.
+- 검증: Google SDK 2.25.0과 모의 HTTP/저장소를 사용한 전체 오프라인 테스트 156개 통과(생략 없음). 지연/일반 주석, 원본 불변, 알 수 없는 타입, 이미지 생성·편집·검색 연결·오류 보존 회귀 및 배포 JSON/문법/diff를 검증했습니다.
+- 한계: 실제 사용자 OpenWebUI 서버에 설치하거나 유료 Gemini API를 호출한 것은 아닙니다. 정상 생성이 확인된 OpenAI 함수와 기존 버전별 JSON은 변경하지 않았습니다.
+
+
 ## 2026-09-27 — OpenAI Responses v1.8.0 / Google Gemini v1.24.0
 
 - 일반 대화 모델이 `conversation_image` 도구로 같은 공급자의 이미지 API를 호출하도록 확장했습니다. OpenAI 기본 이미지 모델은 `gpt-image-2`, Gemini는 기존 `AUTO_IMAGE_MODEL` 설정을 사용합니다. 기존 이미지 전용 모델·OCR·문서 도구는 유지합니다.
