@@ -10,10 +10,10 @@ OpenWebUI 대화에서 **학교 양식으로 HWPX를 작성하고, 디자인을 
 
 | 다운로드 | 용도 |
 |---|---|
-| [OpenAI Responses v1.7.10 JSON](function-openai_responses-v1.7.10.json) · [직접 다운로드](https://raw.githubusercontent.com/goni5252-commits/open-webui-functions/main/function-openai_responses-v1.7.10.json) | 이 안내에서 사용하는 함수 |
+| [OpenAI Responses v1.8.0 JSON](function-openai_responses-v1.8.0.json) · [직접 다운로드](https://raw.githubusercontent.com/goni5252-commits/open-webui-functions/main/function-openai_responses-v1.8.0.json) | 이 안내에서 사용하는 함수 |
 | [엑셀 내보내기 v0.4.0 JSON](function-엑셀로_내보내기-v0.4.0.json) | 답변의 Markdown 표를 XLSX로 저장하는 Action (Open WebUI 0.11.4+) |
 | [한글 내보내기 v3.4.0 JSON](function-한글문서_내보내기-v3.4.0.json) | 기존 답변을 HWPX로 저장하는 Action (Open WebUI 0.11.4+) |
-| [Google Gemini v1.23.6 JSON](function-google_gemini.json) | 별도 Gemini 함수 |
+| [Google Gemini v1.24.0 JSON](function-google_gemini-v1.24.0.json) | 별도 Gemini 함수 |
 | [Gemini RAG Bypass JSON](function-google_gemini_rag_bypass.json) | 별도 RAG Bypass 함수 |
 
 [변경 내역](CHANGELOG.md) · [OpenAI 함수 Python 원본](functions/openai_responses.py)
@@ -143,7 +143,7 @@ docker compose logs --tail 80 open-terminal
 
 ## 3. OpenWebUI에 함수 적용하기
 
-1. 위의 **OpenAI Responses v1.7.10 JSON**을 저장합니다. GitHub의 Raw/다운로드를 사용하고 웹페이지 HTML을 저장하지 마세요.
+1. 위의 **OpenAI Responses v1.8.0 JSON**을 저장합니다. GitHub의 Raw/다운로드를 사용하고 웹페이지 HTML을 저장하지 마세요.
 2. OpenWebUI의 **워크스페이스 → 함수**에서 가져오기 기능으로 JSON을 불러옵니다. 메뉴 명칭은 버전에 따라 조금 다를 수 있습니다.
 3. 함수를 활성화하고 Valve 설정에서 자신의 OpenAI API 키를 입력합니다. 이미 사용 중이면 기존 API 설정을 확인합니다.
 4. 아래 설정은 기본값을 유지하면 됩니다.
@@ -272,3 +272,40 @@ Open WebUI **0.11.4 이상**을 대상으로 합니다. 기존 함수와 설정�
 구분선이 있는 파이프 Markdown 표를 지원합니다. HTML 표·병합 셀·중첩 표는 지원하지 않습니다. 빈 헤더는 ColN으로 채우고 추가 열도 보존합니다. 다운로드 성공 문구는 브라우저의 실행 응답까지 확인한 상태이며 OS의 최종 저장 완료를 보장하지 않습니다. 서버 WebSocket 제한으로 큰 파일이 실패하면 범위를 줄여 다시 실행하세요.
 
 검증: `python3 -m unittest discover -s tests -p test_excel_export.py` (pandas, xlsxwriter, openpyxl, Pydantic 2 필요; JavaScript 검사에는 PATH의 Node 필요). 실제 Excel에서의 표시·인쇄는 별도 확인이 필요합니다.
+
+
+## 8. 대화 중 이미지 생성·수정
+
+OpenAI Responses **v1.8.0**, Google Gemini **v1.24.0**부터 일반 대화 모델을 선택한 채 이미지 생성·수정을 요청할 수 있습니다. 두 함수의 최신 JSON을 각각 가져오고 활성화하세요. 별도 OpenWebUI 이미지 엔진이나 Terminal 설정은 필요하지 않습니다. GitHub 파일 업데이트가 서버에 설치된 함수를 자동 갱신하지는 않습니다.
+
+| 설정 | OpenAI | Gemini |
+|---|---|---|
+| 대화형 이미지 도구 | `ENABLE_CONVERSATION_IMAGES=True` (기본) | `ENABLE_CONVERSATION_IMAGES=True` (기본) |
+| 실제 이미지 API 모델 | `CONVERSATION_IMAGE_MODEL=gpt-image-2` | `AUTO_IMAGE_MODEL=gemini-3.1-flash-image` |
+| 출력 설정 | 기존 `IMAGE_QUALITY`, `IMAGE_SIZE` 및 사용자 밸브 | 기존 `IMAGE_GENERATION_ASPECT_RATIO`, `IMAGE_GENERATION_RESOLUTION` |
+| 메시지당 이미지 API 호출 상한 | `CONVERSATION_IMAGE_MAX_CALLS=2` | `CONVERSATION_IMAGE_MAX_CALLS=2` |
+
+같은 공급자의 기존 API 키를 사용합니다. 설정한 이미지 모델의 접근 권한·과금이 필요하며 권한 오류 때 다른 모델로 자동 대체하지 않습니다. OpenAI에서는 함수 호출을 지원하는 대화 모델을 사용하세요. Gemini에서는 기존 UI의 legacy 도구 모드에서도 내부 이미지 도구를 제공합니다.
+
+같은 채팅에서 다음 순서로 확인해 보세요.
+
+1. “학교 축제 포스터를 구상하자. 파란색과 흰색을 쓰고 문구는 ‘함께 만드는 내일’로 해줘.”
+2. “그 조건대로 포스터 이미지를 만들어줘.”
+3. 이미지를 재첨부하지 않고 “배경만 더 밝게 바꿔줘. 문구와 배치는 유지해줘.”
+4. 참고 사진을 첨부하고 “기존 포스터는 유지하고 이 사진의 색감만 적용해줘.”
+5. “이번에는 완전히 새로운 숲 풍경 이미지를 만들어줘.”
+6. “이미지 생성용 프롬프트만 써줘.” 또는 일반 질문으로 돌아갑니다.
+
+대화 모델이 요청과 앞선 조건을 해석해 `conversation_image`를 호출합니다. 수정 원본과 참고 이미지를 별도로 선택하며, 과거 이미지가 있다고 모든 요청을 수정으로 처리하지 않습니다. OCR·제목 생성 등 백그라운드 작업에는 이 도구를 넣지 않습니다. 중복 실행을 막기 위해 이 경로에서는 OpenWebUI의 `generate_image`/`edit_image`와 OpenAI 내장 `image_generation` 도구를 함께 사용하지 않습니다.
+
+이미지는 사용자 권한으로 OpenWebUI 파일 저장소에 저장하고 답변에 표시합니다. 저장 실패 시 답변의 인라인 이미지로 보존합니다. 다음 요청은 전달된 대화 분기의 이미지와 첨부 파일에서 원본을 찾아 사용하며, 서버 전체의 마지막 이미지를 공유하지 않습니다. 이미지 ID는 서버 파일 또는 이미지 데이터에서 만들어집니다. 메시지 편집·분기로 제외된 이미지, 삭제된 파일, 권한 없는 파일은 수정 원본으로 자동 대체하지 않습니다. 이전 이미지가 현재 대화 문맥에서 빠졌다면 다시 첨부해야 합니다.
+
+이미지 원본은 축소·손실 압축 없이 읽습니다. OpenAI는 기존 편집 API의 PNG 정규화를 거칩니다. 한 번에 수정 원본 1장과 참고 이미지 최대 4장, 입력 이미지당 20 MiB까지 사용합니다. 외부 URL 이미지는 이 새 도구에서 서버가 직접 다운로드하지 않으므로 원본 파일을 첨부해 주세요. 기존 이미지 전용 모델 선택 방식도 유지됩니다.
+
+Gemini는 이미지 도구의 안정적인 실행을 위해 일반 대화도 비스트리밍으로 처리하므로 답변이 완성된 뒤 표시될 수 있습니다. 검색 전용 설정에서는 검색 결과를 얻은 뒤 대화 모델을 한 번 더 호출해 이미지 작업 여부를 판단합니다. 따라서 검색만 하는 요청에서도 추가 텍스트 API 호출이 발생할 수 있습니다. 이미지 API 호출은 Pipe와 Google SDK 모두 자동 재시도를 끄며, 같은 도구 인자의 중복 호출은 요청 안에서 재사용합니다. 실패한 요청의 재시도는 새 사용자 메시지에서 수행하세요.
+
+이미지 수정은 저장한 원본을 이미지 API에 다시 보내는 방식입니다. 공급자의 이미지 전용 대화 세션/생각 서명을 장기간 저장하는 구현은 아닙니다. Gemini의 같은 요청 안에서 일어나는 도구 호출은 SDK가 서명을 전달하고, 검색 후 단계에도 원래 응답의 서명을 보존합니다.
+
+Gemini의 대화형 도구를 끄면 기존 `AUTO_IMAGE_ROUTING` 키워드 경로로 돌아갑니다. 자동 이미지 호출을 모두 끄려면 두 값을 모두 False로 설정하세요. 저장·공유 권한 처리는 [OpenWebUI 0.11.4 파일 API](https://github.com/open-webui/open-webui/blob/v0.11.4/backend/open_webui/routers/files.py)를 기준으로 대조했습니다. Google SDK에 `HttpRetryOptions`가 필요합니다. 현재 검증에 사용한 SDK는 `google-genai 2.25.0`이며, 실제 서버의 SDK 버전과 모델 접근 권한은 설치 후 확인해야 합니다.
+
+검증은 HTTP와 OpenWebUI 저장소 경계를 모의 처리한 오프라인 테스트입니다. 실제 API의 한국어 의도 판단, 이미지 품질·수정 일관성, 비용, 서버 화면에서의 표시까지 검증한 것은 아닙니다.

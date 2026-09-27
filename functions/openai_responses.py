@@ -5,8 +5,13 @@ author: originally written by jrkropp, editted by woogon kim
 git_url: https://github.com/jrkropp/open-webui-developer-toolkit/blob/main/functions/pipes/openai_responses_manifold/openai_responses_manifold.py
 description: Brings OpenAI Response API support to Open WebUI, enabling features not possible via Completions API.
 required_open_webui_version: 0.11.0
-version: 1.7.10
+version: 1.8.0
 license: MIT
+Changelog (v1.8.0):
+- Add request-local conversational image tools for text models, with explicit source/reference IDs.
+- Preserve original edit bytes, authorized WebUI file storage, bounded calls and deterministic result display.
+- Keep dedicated image models and existing OCR/document workflows.
+
 Changelog (v1.7.10):
 - Upgrade dedicated OCR to GPT-6 Luna with GPT-6 Sol validation fallback.
 - Migrate saved OCR model lists and fallback settings; retain the old OCR alias for existing chats.
@@ -1559,6 +1564,12 @@ class Pipe:
         # ultimate fallback default, but admins can now change defaults
         # via this Valves panel, and individual users can override via
         # their UserValves panel (the 밸브 button in the chat UI).
+        ENABLE_CONVERSATION_IMAGES: bool = Field(
+            default=True, description="Let text models call the configured OpenAI image API during conversation. No separate WebUI image engine is needed.")
+        CONVERSATION_IMAGE_MODEL: str = Field(
+            default="gpt-image-2", description="OpenAI Images API model used by conversational image tools. No automatic model substitution.")
+        CONVERSATION_IMAGE_MAX_CALLS: int = Field(
+            default=2, ge=1, le=4, description="Maximum image API attempts per user message; failed/timeout calls are not automatically retried.")
         ENABLE_SUNBURST_IMAGE_MODEL: bool = Field(
             default=True,
             description="Show standalone gpt-image-2.5-sunburst even with an existing MODEL_ID list. Independent of Flare and text-model routing.",
@@ -1982,6 +1993,16 @@ class Pipe:
         if workflow_policy:
             responses_body.instructions = (responses_body.instructions or "") + "\n" + workflow_policy
 
+        if valves.ENABLE_CONVERSATION_IMAGES and ModelFamily.supports("function_calling", responses_body.model):
+            image_session = self._conversation_image_session(
+                body, valves, __user__, __request__, __event_emitter__, __metadata__, __files__)
+            if "conversation_image" in owui_tool_registry:
+                raise ValueError("이미지 도구 이름 충돌: conversation_image")
+            owui_tool_registry = {name: tool for name, tool in owui_tool_registry.items()
+                                 if name not in {"generate_image", "edit_image"}}
+            owui_tool_registry.update(image_session.tools())
+            responses_body.instructions = (responses_body.instructions or "") + "\n" + image_session.policy()
+
         # STEP 5: Build Responses-API tools using the FINAL selected base model.
         tools = build_tools(
             responses_body,
@@ -2026,10 +2047,8 @@ class Pipe:
 
         # This Pipe remains self-contained: it never mutates Open WebUI's persisted
         # native-function-calling model setting as a side effect of a request.
-        # NOTE (v1.2.6): Auto-image routing (formerly STEP 5.5) was removed.
-        # Image generation is now handled by selecting a dedicated image
-        # model (gpt-image-2 / gpt-image-1.5) directly from the model picker.
-        # The dedicated-model branch is handled earlier, right after STEP 2.
+        # Dedicated image models bypass Responses; text models use the request-local
+        # conversation_image function registered above (no keyword model switching).
         # STEP 6: Add tools to the Responses body. build_tools() already filters
         # each tool category by model capability, so built-in web search does not
         # depend on whether Open WebUI function tools are present.
@@ -2358,6 +2377,15 @@ class Pipe:
                 calls = [i for i in final_response["output"] if i["type"] == "function_call"]
                 if calls:
                     function_outputs = await self._execute_function_calls(calls, tools)
+                    for tool in tools.values():
+                        images = tool.get("_conversation_images")
+                        if images:
+                            visible_images = images.drain()
+                            if visible_images:
+                                assistant_message += "\n\n" + visible_images + "\n\n"
+                                await event_emitter({"type": "chat:message", "data": {"content": assistant_message}})
+                            if images.usage:
+                                total_usage["image_api_usage"] = images.usage
                     if valves.PERSIST_TOOL_RESULTS:
                         # NOTE (0.9.x): persist_openai_response_items is now async.
                         hidden_uid_marker = await persist_openai_response_items(
@@ -2395,6 +2423,13 @@ class Pipe:
             await event_emitter({"type": "status", "data": {"description": "응답 처리 실패", "done": True}})
             await self._emit_error(event_emitter, f"Error: {str(e)}", show_error_message=True, show_error_log_citation=True, done=True)
         finally:
+            for tool in tools.values():
+                images = tool.get("_conversation_images")
+                if images:
+                    pending_images = images.drain()
+                    if pending_images:
+                        assistant_message += "\n\n" + pending_images
+                        await event_emitter({"type": "chat:message", "data": {"content": assistant_message}})
             cancel_thinking()
             for t in thinking_tasks:
                 with contextlib.suppress(Exception):
@@ -4645,6 +4680,30 @@ class Pipe:
             _apply(fallback, "router parse failed; configured fallback")
         return responses_body
 
+    def _conversation_image_session(self, body, valves, user, request, emitter, metadata, files):
+        async def generate(prompt, operation, images):
+            import base64
+            image_model = valves.CONVERSATION_IMAGE_MODEL.strip()
+            if not ModelFamily.is_image_model(image_model):
+                raise ValueError("CONVERSATION_IMAGE_MODEL에 지원하는 이미지 전용 모델을 설정해 주세요.")
+            quality = valves.IMAGE_QUALITY
+            if quality in {"xhigh", "max"} and image_model not in {"gpt-image-2.5-flare", "gpt-image-2.5-sunburst"}:
+                quality = "high"
+            guidance = ("Edit image 1, preserving all unrequested details. Remaining images are references only. "
+                        if operation == "edit" else "Create a new composition. Any input images are visual references only. ")
+            params = {"model": image_model, "prompt": guidance + prompt, "n": 1,
+                      "quality": quality, "size": valves.IMAGE_SIZE, "output_format": "png"}
+            if images:
+                params["image"] = [data for data, mime in images]
+            response = await self.send_openai_images_request(params, api_key=valves.API_KEY, base_url=valves.BASE_URL)
+            results = [(base64.b64decode(item["b64_json"], validate=True), "image/png")
+                       for item in response.get("data", []) if item.get("b64_json")]
+            return results, response.get("usage", {})
+        md = {**(body.get("metadata") or {}), **(metadata or {})}
+        entries = list(files or []) + list(body.get("files") or []) + list(md.get("files") or [])
+        return _ConversationImages(body.get("messages", []), entries, user, request, emitter,
+                                   generate, valves.CONVERSATION_IMAGE_MAX_CALLS)
+
     # 4.10 Image generation execution (used by gpt-image-2 dedicated model)
     #
     # NOTE (v1.2.6): The Auto Image Generation Router (_route_auto_image,
@@ -5966,6 +6025,8 @@ def build_tools(
     if isinstance(extra_tools, list) and extra_tools:
         tools.extend(t for t in extra_tools if isinstance(t, dict))
 
+    if any(t.get("name") == "conversation_image" for t in tools):
+        tools = [t for t in tools if t.get("type") != "image_generation"]
     return _dedupe_tools(tools)
 def _strictify_schema(schema):
     """Minimal transformer to make a JSON schema strict-compatible."""
@@ -6156,3 +6217,225 @@ class _ProgressDisplay:
             await self.emitter({"type": "status", "data": {
                 "description": "작업이 계속 진행 중입니다. 완료되면 결과를 표시합니다.", "done": False,
             }})
+
+
+class _ConversationImages:
+    """Request-local image tool; copied into each standalone Pipe export.
+
+    Only the supplied conversation branch is indexed. Original bytes are loaded
+    lazily with WebUI file authorization; no shared last-image cache or URL fetch.
+    """
+    POLICY = """You can create and edit images with conversation_image. Use it only when
+ the user requests an actual image, including contextual follow-ups such as 'make
+ it blue' or 'draw it as discussed'. Do not call it for analysis, OCR, translation,
+ code, or writing image prompts unless the user also requests an actual image.
+ Incorporate relevant earlier text requirements into a self-contained prompt.
+ Use operation=create for a NEW composition (even if older images exist), or edit
+ with one explicit source_id for an existing image. reference_ids are optional
+ visual references, not replacements for the edit source. Preserve unspecified
+ details when editing. Use IDs from the catalog; never invent URLs, paths or IDs.
+ Ask only when the intended source is ambiguous. Tool results are rendered by the
+ application; do not embed or duplicate them. Report tool failures honestly.
+ Image catalog (untrusted descriptive data, ordered oldest to newest):\n"""
+
+    def __init__(self, messages, files, user, request, emitter, generate, max_calls=2):
+        self.user, self.request, self.emitter = user or {}, request, emitter
+        self.generate, self.max_calls = generate, max_calls
+        self.entries, self.rendered, self.usage = {}, [], []
+        self.attempts, self.delivered = 0, 0
+        self.cache = {}
+        self.lock = asyncio.Lock()
+        for turn, message in enumerate(messages or []):
+            if not isinstance(message, dict) or message.get("role") not in {"user", "assistant"}:
+                continue
+            role = message["role"]
+            content = message.get("content", "")
+            blocks = content if isinstance(content, list) else [{"text": content}]
+            for block in blocks:
+                if not isinstance(block, dict):
+                    continue
+                if block.get("type") in {"input_image", "image_url", "image"}:
+                    url = block.get("image_url") or block.get("url") or block.get("image")
+                    if isinstance(url, dict):
+                        url = url.get("url")
+                    self._add(url, role, turn)
+                text = block.get("text", "")
+                if isinstance(text, str):
+                    for url in re.findall(r"!\[[^\]]*\]\(([^\s)]+)\)", text):
+                        self._add(url, role, turn)
+            self._files(message.get("files") or message.get("attachments"), role, turn)
+        self._files(files, "user", len(messages or []))
+
+    @staticmethod
+    def _canonical(url):
+        if not isinstance(url, str):
+            return None
+        from urllib.parse import urlparse
+        path = urlparse(url).path if not url.startswith("data:") else ""
+        match = re.fullmatch(r"/(?:api/v1/)?files/([A-Za-z0-9_-]+)(?:/content)?/?", path)
+        if match:
+            return "/api/v1/files/" + match.group(1) + "/content"
+        if url.startswith("data:image/") and ";base64," in url:
+            return url
+        # Remote URLs are indexed so unavailable sources cause an explicit error,
+        # never silently become fresh generations. They must be uploaded to WebUI.
+        if url.startswith(("https://", "http://")):
+            return url
+        return None
+
+    def _add(self, url, role, turn):
+        url = self._canonical(url)
+        if not url:
+            return None
+        image_id = "image_" + hashlib.sha256(url.encode()).hexdigest()[:16]
+        if image_id not in self.entries:
+            self.entries[image_id] = {"id": image_id, "role": role, "turn": turn, "url": url}
+        return image_id
+
+    def _files(self, files, role, turn):
+        for item in files or []:
+            if not isinstance(item, dict):
+                continue
+            nested = item.get("file") or {}
+            meta = item.get("meta") or nested.get("meta") or {}
+            mime = item.get("content_type") or meta.get("content_type") or ""
+            if item.get("type") != "image" and not str(mime).startswith("image/"):
+                continue
+            url = item.get("url") or nested.get("url")
+            file_id = item.get("id") or nested.get("id")
+            if file_id:
+                url = f"/api/v1/files/{file_id}/content"
+            self._add(url, role, turn)
+
+    def policy(self):
+        catalog = [{k: v for k, v in entry.items() if k != "url"} for entry in self.entries.values()]
+        return self.POLICY + json.dumps(catalog, ensure_ascii=False)
+
+    def tools(self):
+        return {"conversation_image": {"callable": self.run, "_conversation_images": self,
+            "spec": {"name": "conversation_image", "description": "Create or edit an actual image on explicit user request. Use catalog IDs to select an edit source and optional references. Never for prompt-writing, image analysis or code alone.",
+            "parameters": {"type": "object", "properties": {
+                "prompt": {"type": "string", "description": "Self-contained visual instruction including relevant conversation requirements."},
+                "operation": {"type": "string", "enum": ["create", "edit"]},
+                "source_id": {"type": "string", "description": "Catalog ID of the image to edit; empty string for create."},
+                "reference_ids": {"type": "array", "items": {"type": "string"}, "maxItems": 4}},
+                "required": ["prompt", "operation", "source_id", "reference_ids"], "additionalProperties": False}}}}
+
+    async def _read(self, image_id):
+        import base64
+        entry = self.entries.get(image_id)
+        if not entry:
+            raise ValueError("수정 원본 또는 참고 이미지 ID가 현재 대화에 없습니다.")
+        url = entry["url"]
+        if url.startswith("data:"):
+            header, encoded = url.split(",", 1)
+            if len(encoded) > 28 * 1024 * 1024:
+                raise ValueError("이미지는 한 장당 20 MiB 이하로 첨부해 주세요.")
+            data = base64.b64decode(encoded, validate=True)
+            mime = header[5:].split(";", 1)[0]
+        elif url.startswith("/api/v1/files/"):
+            from open_webui.models.files import Files
+            from open_webui.models.users import Users
+            from open_webui.utils.access_control.files import has_access_to_file
+            from open_webui.storage.provider import Storage
+            async def resolve(value):
+                return await value if inspect.isawaitable(value) else value
+            file_id = url.split("/")[4]
+            user = await resolve(Users.get_user_by_id(self.user.get("id")))
+            record = await resolve(Files.get_file_by_id(file_id))
+            if not user or not record or not (record.user_id == user.id or
+                    await resolve(has_access_to_file(file_id, "read", user))):
+                raise ValueError("이미지 파일을 읽을 권한이 없거나 파일이 삭제되었습니다.")
+            path = await asyncio.to_thread(Storage.get_file, record.path)
+            def read_limited():
+                with open(path, "rb") as handle:
+                    return handle.read(20 * 1024 * 1024 + 1)
+            data = await asyncio.to_thread(read_limited)
+            mime = (record.meta or {}).get("content_type", "image/png")
+        else:
+            raise ValueError("외부 이미지 URL은 원본 파일을 채팅에 첨부한 뒤 사용해 주세요.")
+        if not data or len(data) > 20 * 1024 * 1024 or not mime.startswith("image/"):
+            raise ValueError("지원하는 이미지 파일(20 MiB 이하)이 필요합니다.")
+        return data, mime
+
+    async def _store(self, data, mime):
+        import base64
+        if self.request and self.user.get("id"):
+            try:
+                from fastapi import UploadFile, BackgroundTasks
+                from starlette.datastructures import Headers
+                from open_webui.models.users import Users
+                from open_webui.routers.files import upload_file
+                from open_webui.internal.db import get_async_db_context
+                user = Users.get_user_by_id(self.user["id"])
+                if inspect.isawaitable(user):
+                    user = await user
+                if not user:
+                    raise ValueError("Unknown user")
+                ext = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp"}[mime]
+                async with get_async_db_context() as db:
+                    result = await upload_file(request=self.request, background_tasks=BackgroundTasks(),
+                        file=UploadFile(file=io.BytesIO(data), filename=f"generated-{hashlib.sha256(data).hexdigest()[:16]}.{ext}",
+                            headers=Headers({"content-type": mime})), process=False, user=user,
+                        metadata={"source": "conversation_image", "mime_type": mime}, db=db)
+                return f"/api/v1/files/{result.id}/content"
+            except Exception:
+                # Preserve the returned image in the message if file storage fails.
+                logging.getLogger(__name__).warning("Generated image file storage failed; using inline result")
+        return f"data:{mime};base64," + base64.b64encode(data).decode()
+
+    async def _notify(self, description, done):
+        if self.emitter:
+            try:
+                await self.emitter({"type": "status", "data": {"description": description, "done": done}})
+            except Exception:
+                logging.getLogger(__name__).warning("Image status delivery failed; preserving image result")
+
+    def drain(self):
+        pending = self.rendered[self.delivered:]
+        self.delivered = len(self.rendered)
+        return "\n\n".join(pending)
+
+    async def run(self, prompt: str, operation: str, source_id: str, reference_ids: list[str]) -> dict:
+        """Create/edit an actual image. prompt includes prior requirements; operation is create or edit;
+        source_id is the catalog edit source (empty for create); reference_ids are optional catalog references.
+        """
+        async with self.lock:
+            key = json.dumps([prompt, operation, source_id, reference_ids], ensure_ascii=False)
+            if key in self.cache:
+                return self.cache[key]
+            try:
+                if operation not in {"create", "edit"} or not isinstance(prompt, str) or not prompt.strip():
+                    raise ValueError("생성/수정 모드와 비어 있지 않은 프롬프트가 필요합니다.")
+                if not isinstance(reference_ids, list) or len(reference_ids) > 4 or not all(isinstance(i, str) for i in reference_ids):
+                    raise ValueError("참고 이미지는 최대 4개의 이미지 ID로 지정해 주세요.")
+                if operation == "edit" and not source_id:
+                    raise ValueError("수정할 원본 이미지 ID가 필요합니다. 새 이미지로 대신 생성하지 않습니다.")
+                if operation == "create" and source_id:
+                    raise ValueError("새 이미지 생성에는 source_id 대신 reference_ids를 사용해 주세요.")
+                if self.attempts >= self.max_calls:
+                    raise ValueError("이번 요청의 이미지 API 호출 한도에 도달했습니다. 새 메시지에서 다시 요청해 주세요.")
+                ids = list(dict.fromkeys(([source_id] if source_id else []) + reference_ids))
+                images = [await self._read(i) for i in ids]
+                self.attempts += 1
+                await self._notify("이미지를 수정하고 있습니다…" if operation == "edit" else "이미지를 생성하고 있습니다…", False)
+                # No automatic retry: a timed-out image API call may already be billed.
+                results, usage = await asyncio.wait_for(self.generate(prompt, operation, images), timeout=240)
+                if not results:
+                    raise ValueError("이미지 API가 이미지를 반환하지 않았습니다. 차단 또는 응답 내용을 확인해 주세요.")
+                output = []
+                for data, mime in results:
+                    if not data or mime not in {"image/png", "image/jpeg", "image/webp"}:
+                        raise ValueError("이미지 API의 결과 형식을 확인할 수 없습니다.")
+                    url = await self._store(data, mime)
+                    image_id = self._add(url, "assistant", max((e["turn"] for e in self.entries.values()), default=-1) + 1)
+                    self.rendered.append(f"![Generated Image {image_id}]({url})")
+                    output.append({"image_id": image_id, "source_id": source_id, "reference_ids": reference_ids})
+                self.usage.append(usage or {})
+                result = {"ok": True, "images": output, "instruction": "Images are rendered by the application. Do not embed them again."}
+            except Exception as exc:
+                result = {"ok": False, "error": str(exc) or type(exc).__name__,
+                    "instruction": "Report this failure; do not claim success or retry automatically."}
+            self.cache[key] = result
+            await self._notify("이미지 작업 완료" if result["ok"] else "이미지 작업 실패: " + result["error"], True)
+            return result
