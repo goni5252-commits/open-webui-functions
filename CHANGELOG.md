@@ -1,5 +1,12 @@
 # 업데이트 내역
 
+## 2026-09-30 — OpenAI Responses v1.8.2
+
+- `gpt-6-auto`의 Sol 선택 대상과 기본 라우팅 실패 fallback을 `gpt-6-sol`에서 `gpt-6.1-sol`로 변경했습니다. 별칭의 초기 모델, 라우터 JSON 스키마, 안내 문구, 기존 Terra 문서 힌트도 새 Sol에 맞췄습니다.
+- 저장된 `sol` 단계/상한 설정에도 적용됩니다. Luna/Astra 선택 기준과 명시적 Luna 상한·fallback은 유지하며, 새 Sol에서는 `none` 추론 강도를 `low`로 보정합니다. 직접 선택하는 `gpt-6-sol`/`gpt-6-sol-auto`, OCR fallback, PDF 원본 전달은 유지합니다.
+- 검증: 전체 오프라인 테스트 174개 실행, 165개 통과·9개 선택 의존성 테스트 생략(Google SDK 7개, Node 브라우저 계약 2개). 라우터 정상/오류·기존 설정·Astra 제한·문서 힌트·스트리밍/일반 응답 경로와 새 Sol의 추론 강도 보정을 확인했습니다. 배포 JSON/원본 일치, harness 및 diff 검사도 수행했습니다.
+- 한계: 실제 OpenWebUI 서버 설치 및 유료 OpenAI API 호출은 수행하지 않았습니다. 기존 버전별 JSON은 보존합니다.
+
 ## 2026-09-30 — OpenAI Responses v1.8.1
 
 - `gpt-6.1-sol`과 모델 고정형 `gpt-6.1-sol-auto`를 추가했습니다. 저장된 모델 목록에도 노출되며 별도 표시 설정으로 끌 수 있습니다. 새 모델이 지원하지 않는 `none`/`minimal` 추론 강도와 sampling 매개변수를 보정합니다. 기존 smart-auto 대상과 OCR fallback 모델은 유지합니다.

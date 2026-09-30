@@ -10,7 +10,7 @@ OpenWebUI 대화에서 **학교 양식으로 HWPX를 작성하고, 디자인을 
 
 | 다운로드 | 용도 |
 |---|---|
-| [OpenAI Responses v1.8.1 JSON](function-openai_responses-v1.8.1.json) · [직접 다운로드](https://raw.githubusercontent.com/goni5252-commits/open-webui-functions/main/function-openai_responses-v1.8.1.json) | 이 안내에서 사용하는 함수 |
+| [OpenAI Responses v1.8.2 JSON](function-openai_responses-v1.8.2.json) · [직접 다운로드](https://raw.githubusercontent.com/goni5252-commits/open-webui-functions/main/function-openai_responses-v1.8.2.json) | 이 안내에서 사용하는 함수 |
 | [엑셀 내보내기 v0.4.0 JSON](function-엑셀로_내보내기-v0.4.0.json) | 답변의 Markdown 표를 XLSX로 저장하는 Action (Open WebUI 0.11.4+) |
 | [한글 내보내기 v3.4.0 JSON](function-한글문서_내보내기-v3.4.0.json) | 기존 답변을 HWPX로 저장하는 Action (Open WebUI 0.11.4+) |
 | [Google Gemini v1.24.1 JSON](function-google_gemini-v1.24.1.json) | 별도 Gemini 함수 |
@@ -18,16 +18,16 @@ OpenWebUI 대화에서 **학교 양식으로 HWPX를 작성하고, 디자인을 
 
 [변경 내역](CHANGELOG.md) · [OpenAI 함수 Python 원본](functions/openai_responses.py)
 
-**GPT-6.1 Sol / PDF 직접 전달 (v1.8.1)**
+**GPT-6.1 Sol / PDF 직접 전달 (v1.8.2)**
 
-- `gpt-6.1-sol`, `gpt-6.1-sol-auto`를 선택할 수 있습니다. 저장된 모델 목록에도 자동 추가됩니다(`ENABLE_GPT61_SOL_MODEL=true`). `-auto`는 모델을 고정하고 추론 강도만 선택합니다. 기존 `gpt-6-auto`의 모델 선택 정책과 OCR 전용 모델은 그대로 유지합니다.
+- `gpt-6.1-sol`, `gpt-6.1-sol-auto`를 선택할 수 있습니다. 저장된 모델 목록에도 자동 추가됩니다(`ENABLE_GPT61_SOL_MODEL=true`). `-auto`는 모델을 고정하고 추론 강도만 선택합니다. `gpt-6-auto`의 Sol 단계와 기본 fallback은 `gpt-6.1-sol`을 사용합니다. Luna/Astra 선택 기준, 직접 선택하는 `gpt-6-sol`/`gpt-6-sol-auto`, OCR 전용 모델은 유지합니다. 저장된 `sol`/이전 `terra` 단계 설정에도 새 Sol이 적용됩니다.
 - `PDF_NATIVE_INPUT=true`가 기본입니다. 일반 텍스트 모델에서도 대화에 첨부된 PDF 원본 전체를 Responses API의 `input_file`로 전달합니다. 텍스트 PDF와 스캔 PDF를 구분하여 OCR 서비스로 보내지 않습니다. HWPX 파서 결과와 이미지 등 기존 입력은 함께 보존합니다.
 - WebUI 사용자/파일 DB에서 접근 권한을 확인한 저장소 원본만 읽습니다. 현재 전달된 대화 메시지의 이전 PDF 첨부도 포함하며 동일 ID는 한 번만 읽습니다. 원본 누락·권한 오류·용량 초과는 명확히 실패하고 OCR/RAG로 대체하지 않습니다. 임시 대화의 ID 없는 PDF와 지식 컬렉션 전체 자동 펼치기는 지원하지 않습니다. 컬렉션의 PDF는 개별 파일로 첨부하세요.
 - 원본 합계 기본 한도는 50MB(`PDF_NATIVE_MAX_MB`, 낮출 수 있음), 단일 파일은 50MB 미만입니다. 모델의 토큰 한도와 API 제한도 적용되므로 큰 문서는 나누어 첨부하세요. 기존 API `file_id`/URL 입력의 실제 크기는 API에서 검사합니다.
 
 **Mistral을 거치지 않도록 적용하는 순서**
 
-1. 위 **OpenAI Responses v1.8.1 JSON**을 기존 함수에 가져옵니다.
+1. 위 **OpenAI Responses v1.8.2 JSON**을 기존 함수에 가져옵니다.
 2. **관리자 패널 → 설정 → 문서 → 콘텐츠 추출 엔진**을 `Mistral OCR`에서 `Default`로 바꾸고 저장합니다. 이것이 업로드 시 Mistral 호출을 멈추는 설정입니다. 전역 문서 추출 설정이므로 다른 모델의 업로드에도 영향을 줍니다. `Default`는 WebUI의 로컬 추출이며, 함수는 그 추출 결과 대신 PDF 원본을 API에 전달합니다.
 3. 사용 모델의 **File Upload는 켜고, File Context는 끕니다.** File Context를 켜두면 원본 전송과 별도로 RAG 텍스트가 함께 들어갈 수 있습니다. `Bypass Embedding and Retrieval`/`Full Context`는 원본 PDF 전달과 다른 기능입니다.
 4. 새 일반 대화에서 `gpt-6.1-sol`을 고르고 PDF를 첨부합니다. `PDF 원본 N개를 API에 직접 전달합니다` 상태를 확인하고, 서버 로그에 새 Mistral 요청이 없는지 확인합니다. 기존 대화의 이미 주입된 RAG 문구는 소급 삭제하지 않습니다.
@@ -161,7 +161,7 @@ docker compose logs --tail 80 open-terminal
 
 ## 3. OpenWebUI에 함수 적용하기
 
-1. 위의 **OpenAI Responses v1.8.1 JSON**을 저장합니다. GitHub의 Raw/다운로드를 사용하고 웹페이지 HTML을 저장하지 마세요.
+1. 위의 **OpenAI Responses v1.8.2 JSON**을 저장합니다. GitHub의 Raw/다운로드를 사용하고 웹페이지 HTML을 저장하지 마세요.
 2. OpenWebUI의 **워크스페이스 → 함수**에서 가져오기 기능으로 JSON을 불러옵니다. 메뉴 명칭은 버전에 따라 조금 다를 수 있습니다.
 3. 함수를 활성화하고 Valve 설정에서 자신의 OpenAI API 키를 입력합니다. 이미 사용 중이면 기존 API 설정을 확인합니다.
 4. 아래 설정은 기본값을 유지하면 됩니다.
@@ -294,7 +294,7 @@ Open WebUI **0.11.4 이상**을 대상으로 합니다. 기존 함수와 설정�
 
 ## 8. 대화 중 이미지 생성·수정
 
-OpenAI Responses **v1.8.1**, Google Gemini **v1.24.1**부터 일반 대화 모델을 선택한 채 이미지 생성·수정을 요청할 수 있습니다. 두 함수의 최신 JSON을 각각 가져오고 활성화하세요. 별도 OpenWebUI 이미지 엔진이나 Terminal 설정은 필요하지 않습니다. GitHub 파일 업데이트가 서버에 설치된 함수를 자동 갱신하지는 않습니다.
+OpenAI Responses **v1.8.2**, Google Gemini **v1.24.1**부터 일반 대화 모델을 선택한 채 이미지 생성·수정을 요청할 수 있습니다. 두 함수의 최신 JSON을 각각 가져오고 활성화하세요. 별도 OpenWebUI 이미지 엔진이나 Terminal 설정은 필요하지 않습니다. GitHub 파일 업데이트가 서버에 설치된 함수를 자동 갱신하지는 않습니다.
 
 | 설정 | OpenAI | Gemini |
 |---|---|---|

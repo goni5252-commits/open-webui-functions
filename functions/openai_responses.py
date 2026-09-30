@@ -5,8 +5,12 @@ author: originally written by jrkropp, editted by woogon kim
 git_url: https://github.com/jrkropp/open-webui-developer-toolkit/blob/main/functions/pipes/openai_responses_manifold/openai_responses_manifold.py
 description: Brings OpenAI Response API support to Open WebUI, enabling features not possible via Completions API.
 required_open_webui_version: 0.11.0
-version: 1.8.1
+version: 1.8.2
 license: MIT
+Changelog (v1.8.2):
+- Route the gpt-6-auto Sol tier, default and failure fallback to GPT-6.1 Sol.
+- Preserve Luna/Astra gates, legacy tier settings and explicit GPT-6 Sol/OCR routes.
+
 Changelog (v1.8.1):
 - Add GPT-6.1 Sol and fixed-model auto effort, including saved model lists.
 - Pass authorized PDF originals directly as Responses input_file data in normal chats.
@@ -656,7 +660,7 @@ class ModelFamily:
         "gpt-6.1-sol-auto":                {"base_model": "gpt-6.1-sol", "params": {"_auto_reasoning": True}},
         "gpt-6-luna-auto":               {"base_model": "gpt-6-luna", "params": {"_auto_reasoning": True}},
         # Sol is a validation placeholder until the smart router selects a target.
-        "gpt-6-auto":                    {"base_model": "gpt-6-sol", "params": {"_auto_model_route": True}},
+        "gpt-6-auto":                    {"base_model": "gpt-6.1-sol", "params": {"_auto_model_route": True}},
         # ── GPT-5.6 (v1.3.0) ─────────────────────────────────────────────
         # The bare 'gpt-5.6' id is an official OpenAI API alias that routes
         # to gpt-5.6-sol; mirrored here so either form works in WebUI.
@@ -1228,7 +1232,7 @@ class Pipe:
                 "IMAGE_QUALITY / IMAGE_SIZE Valves below.\n"
                 "OCR model: gpt-6-ocr uses Luna-first native image/file passthrough, RAG-message bypass, "
                 "PDF batching and GPT-6 Sol fallback. External tools/web search are disabled in OCR mode.\n"
-                "Automatic models: gpt-6-auto chooses GPT-6 Luna/Sol/Astra with Sol as the default and Astra reserved for exceptional work; "
+                "Automatic models: gpt-6-auto chooses GPT-6 Luna / GPT-6.1 Sol / GPT-6 Astra with GPT-6.1 Sol as the default and Astra reserved for exceptional work; "
                 "gpt-6-sol-auto, gpt-6-luna-auto and gpt-6-astra-auto keep the selected model fixed and auto-select effort. gpt-5.6-auto remains "
                 "strictly Luna/Terra/Sol for backward-compatible cost control. gpt-5.6-sol-auto, "
                 "gpt-5.6-terra-auto and gpt-5.6-luna-auto "
@@ -1289,7 +1293,7 @@ class Pipe:
         )
         GPT6_AUTO_POLICY: Literal["sol_first"] = Field(
             default="sol_first",
-            description="Sol is the default; Luna handles clearly simple tasks; Astra requires exceptional work. Ordinary effort is capped at medium, difficult effort at high. Old policies migrate automatically.",
+            description="GPT-6.1 Sol is the default; Luna handles clearly simple tasks; Astra requires exceptional work. Ordinary effort is capped at medium, difficult effort at high. Old policies migrate automatically.",
         )
         @model_validator(mode="before")
         @classmethod
@@ -1322,11 +1326,11 @@ class Pipe:
         )
         GPT6_AUTO_MAX_TARGET: Literal["luna", "sol", "astra"] = Field(
             default="astra",
-            description="Highest GPT-6 auto target. sol prevents Astra use; saved terra ceilings migrate to sol.",
+            description="Highest GPT-6 auto target. sol means GPT-6.1 Sol and prevents Astra use; saved terra ceilings migrate to sol.",
         )
         GPT6_AUTO_FALLBACK_TARGET: Literal["luna", "sol"] = Field(
             default="sol",
-            description="Router failure target, subject to model ceiling. Astra is never used merely because routing failed.",
+            description="Router failure target (sol = GPT-6.1 Sol), subject to model ceiling. Astra is never used merely because routing failed.",
         )
         GPT6_AUTO_FALLBACK_EFFORT: Literal["none", "low", "medium", "high", "xhigh", "max"] = Field(
             default="medium",
@@ -4245,7 +4249,7 @@ class Pipe:
         is_gpt6_auto = ModelFamily._norm(public_alias) == "gpt-6-auto"
         sol_first = is_gpt6_auto
         if is_gpt6_auto:
-            model_order = ["gpt-6-luna", "gpt-6-sol", "gpt-6-astra"]
+            model_order = ["gpt-6-luna", "gpt-6.1-sol", "gpt-6-astra"]
             max_target = str(getattr(valves, "GPT6_AUTO_MAX_TARGET", "astra") or "astra").lower()
             fallback_target_setting = str(getattr(valves, "GPT6_AUTO_FALLBACK_TARGET", "sol") or "sol").lower()
             fallback_effort_setting = str(getattr(valves, "GPT6_AUTO_FALLBACK_EFFORT", "medium") or "medium").lower()
@@ -4267,7 +4271,7 @@ class Pipe:
         short_to_model = {v: k for k, v in model_short.items()}
         if is_gpt6_auto:
             # Old HWPX hints and programmatic valve objects may still say Terra.
-            short_to_model["terra"] = "gpt-6-sol"
+            short_to_model["terra"] = "gpt-6.1-sol"
             if max_target == "terra":
                 max_target = "sol"
         max_map = {model_short[model]: i for i, model in enumerate(model_order)}
@@ -4438,7 +4442,7 @@ class Pipe:
             profile = "sol_first"
             terra_bias = "off"
             profile_rules[profile] = (
-                "Default to GPT-6 Sol for substantive or uncertain tasks. Use GPT-6 Luna only for clearly "
+                "Default to GPT-6.1 Sol for substantive or uncertain tasks. Use GPT-6 Luna only for clearly "
                 "simple focused work. GPT-6 Astra is reserved for exceptional difficulty where Sol is unlikely to suffice."
             )
             roles = "Luna = clear simple tasks; Sol = default assistant and difficult work; Astra = exceptional difficulty."
@@ -4455,7 +4459,7 @@ class Pipe:
                 "agentic_exceptional: exceptional research/proofs/codebase work or difficult end-to-end workflows where Sol is unlikely to suffice. "
                 "Only this class may use Astra, subject to the promotion gate; even this class may stay on Sol.\n"
                 "Length, attachment count, formal tone, ordinary tool use and requests to be careful do not alone justify Astra.\n"
-                "Use none/low for easy tasks, medium for ordinary work, high for difficult work. No automatic xhigh/max.\n"
+                "Use none only with Luna; use low for easy tasks, medium for ordinary work, high for difficult work. Sol and Astra require at least low. No automatic xhigh/max.\n"
             )
             terra_bias_rules = ""
             astra_rules = (

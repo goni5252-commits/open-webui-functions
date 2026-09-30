@@ -65,6 +65,7 @@ class RegistrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(changed,{'Pipe.pipe','Pipe._pipe_impl','Pipe._run_streaming_loop',
             'Pipe._run_ocr_model','Pipe._validate_ocr_result','ModelFamily.is_ocr_model',
             'Pipe._inject_native_hwpx_context','build_tools','Pipe.pipes',
-            'ModelFamily.reasoning_efforts','_prepare_responses_request'})
+            'ModelFamily.reasoning_efforts','_prepare_responses_request',
+            'Pipe._route_auto_model_and_reasoning'})
 
 if __name__=='__main__': unittest.main()
