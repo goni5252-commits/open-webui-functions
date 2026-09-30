@@ -1,5 +1,14 @@
 # 업데이트 내역
 
+## 2026-09-30 — OpenAI Responses v1.8.1
+
+- `gpt-6.1-sol`과 모델 고정형 `gpt-6.1-sol-auto`를 추가했습니다. 저장된 모델 목록에도 노출되며 별도 표시 설정으로 끌 수 있습니다. 새 모델이 지원하지 않는 `none`/`minimal` 추론 강도와 sampling 매개변수를 보정합니다. 기존 smart-auto 대상과 OCR fallback 모델은 유지합니다.
+- 일반 대화에 `PDF_NATIVE_INPUT=true`를 기본 적용했습니다. 텍스트·스캔 PDF 원본을 OpenAI Responses `input_file`에 base64로 직접 넣으며 Mistral/OCR 서비스를 호출하지 않습니다. 사용자 접근 권한과 DB에 등록된 저장소 경로를 확인하고, 클라이언트가 지정한 임의 경로는 읽지 않습니다.
+- 현재 WebUI가 전달한 메시지의 이전 PDF 첨부, 중복 ID, MIME 기반 PDF 판별, HWPX/이미지 혼합 입력을 처리합니다. 원본 누락·권한 실패·읽기 실패·빈/비PDF 파일·용량 초과는 오류로 알립니다. 원본 합계 50MB와 단일 파일 50MB 미만 제한을 적용하며 OCR/RAG fallback은 하지 않습니다.
+- README에 JSON 가져오기, 관리자 문서 추출 엔진 `Mistral OCR → Default`, 모델 `File Upload 켜기 / File Context 끄기` 순서를 추가했습니다. 업로드 단계는 Pipe 실행보다 앞서므로 함수만으로 Mistral 호출 중단을 보장하지 않으며 서버 설정도 바꿔야 합니다. Default의 로컬 추출과 원본 API 전송은 구분해서 안내합니다.
+- 검증: 번들 Python/Pydantic 2로 전체 오프라인 테스트 172개 실행, 163개 통과·9개 생략. 추가한 모델/PDF 회귀 16개 모두 통과. 생략은 미설치 Google SDK 계약 7개와 PATH에 Node가 없는 브라우저 JS 계약 2개이며 이번 변경 대상이 아닙니다. Python/배포 JSON 원본 일치, harness SHA-256, `git diff --check`를 확인했습니다.
+- 한계: 사용자 서버 설치·관리자 설정 변경 및 실제 OpenAI 유료 요청은 수행하지 않았습니다. 접근 제어/저장소/API는 모의 경계로 검증했습니다. 지식 컬렉션 전체 자동 전송과 ID 없는 임시 대화 PDF는 지원하지 않으며 개별 PDF를 일반 대화에 첨부해야 합니다. 기존 `file_id`/URL 입력의 용량과 모델 토큰 한도는 API가 최종 검사합니다. 이전 버전별 JSON은 보존합니다.
+
 ## 2026-09-27 — Google Gemini v1.24.1
 
 - 이미지 도구 실행 전 `isinstance() arg 2 must be a type, a tuple of types, or a union`으로 실패하는 조건을 재현하고 수정했습니다. 동적 로딩에서 문자열로 남은 함수 타입 주석을 Google SDK가 인자 변환에 사용하면서 생기는 오류입니다.

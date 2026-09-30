@@ -5,8 +5,13 @@ author: originally written by jrkropp, editted by woogon kim
 git_url: https://github.com/jrkropp/open-webui-developer-toolkit/blob/main/functions/pipes/openai_responses_manifold/openai_responses_manifold.py
 description: Brings OpenAI Response API support to Open WebUI, enabling features not possible via Completions API.
 required_open_webui_version: 0.11.0
-version: 1.8.0
+version: 1.8.1
 license: MIT
+Changelog (v1.8.1):
+- Add GPT-6.1 Sol and fixed-model auto effort, including saved model lists.
+- Pass authorized PDF originals directly as Responses input_file data in normal chats.
+- Preserve mixed attachments and reject missing, inaccessible or oversized PDF originals.
+
 Changelog (v1.8.0):
 - Add request-local conversational image tools for text models, with explicit source/reference IDs.
 - Preserve original edit bytes, authorized WebUI file storage, bounded calls and deterministic result display.
@@ -588,6 +593,7 @@ class ModelFamily:
         # GPT-5.6, while the model still decides whether to call it.
         "gpt-6-astra":         {"features": {"function_calling","reasoning","reasoning_summary","web_search_tool","web_search_default","image_gen_tool","verbosity","computer_use","tool_search"}},
         "gpt-6-sol":         {"features": {"function_calling","reasoning","reasoning_summary","web_search_tool","web_search_default","image_gen_tool","verbosity","computer_use","tool_search"}},
+        "gpt-6.1-sol":         {"features": {"function_calling","reasoning","reasoning_summary","web_search_tool","web_search_default","image_gen_tool","verbosity","computer_use","tool_search"}},
         "gpt-6-luna":         {"features": {"function_calling","reasoning","reasoning_summary","web_search_tool","web_search_default","image_gen_tool","verbosity","computer_use","tool_search"}},
         # ── GPT-5.6 family (released 2026-07-09; latest frontier) ────────
         # Sol   = flagship ($5/$30 per 1M tok) — SOTA coding/knowledge work.
@@ -647,6 +653,7 @@ class ModelFamily:
         # Fixed Astra with automatic effort.
         "gpt-6-astra-auto":              {"base_model": "gpt-6-astra", "params": {"_auto_reasoning": True}},
         "gpt-6-sol-auto":                {"base_model": "gpt-6-sol", "params": {"_auto_reasoning": True}},
+        "gpt-6.1-sol-auto":                {"base_model": "gpt-6.1-sol", "params": {"_auto_reasoning": True}},
         "gpt-6-luna-auto":               {"base_model": "gpt-6-luna", "params": {"_auto_reasoning": True}},
         # Sol is a validation placeholder until the smart router selects a target.
         "gpt-6-auto":                    {"base_model": "gpt-6-sol", "params": {"_auto_model_route": True}},
@@ -737,8 +744,8 @@ class ModelFamily:
     def reasoning_efforts(cls, model_id: str) -> tuple[str, ...]:
         """Return the supported reasoning-effort ladder for known auto-routed models."""
         base = cls.base_model(model_id)
-        if base == "gpt-6-astra":
-            # GPT-6 Astra explicitly does not support `none`.
+        if base in {"gpt-6-astra", "gpt-6.1-sol"}:
+            # Astra and GPT-6.1 Sol do not support `none`.
             return ("low", "medium", "high", "xhigh", "max")
         if base in {"gpt-6-luna", "gpt-6-sol", "gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol"}:
             return ("none", "low", "medium", "high", "xhigh", "max")
@@ -1202,11 +1209,11 @@ class Pipe:
         )
         # Models
         MODEL_ID: str = Field(
-            default="gpt-6-auto, gpt-6-sol, gpt-6-luna, gpt-6-sol-auto, gpt-6-luna-auto, gpt-6-astra-auto, gpt-6-astra, gpt-6-ocr, gpt-5.6-sol-auto, gpt-5.6-terra-auto, gpt-5.6-luna-auto, gpt-5.6-auto, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-5.4, gpt-5.4-thinking, gpt-5.4-mini, gpt-5.4-nano, gpt-5.3-chat-latest, gpt-5-mini, gpt-image-2.5-flare, gpt-image-2.5-sunburst, gpt-image-2",
+            default="gpt-6.1-sol, gpt-6.1-sol-auto, gpt-6-auto, gpt-6-sol, gpt-6-luna, gpt-6-sol-auto, gpt-6-luna-auto, gpt-6-astra-auto, gpt-6-astra, gpt-6-ocr, gpt-5.6-sol-auto, gpt-5.6-terra-auto, gpt-5.6-luna-auto, gpt-5.6-auto, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-5.4, gpt-5.4-thinking, gpt-5.4-mini, gpt-5.4-nano, gpt-5.3-chat-latest, gpt-5-mini, gpt-image-2.5-flare, gpt-image-2.5-sunburst, gpt-image-2",
             description=(
                 "Comma separated OpenAI model IDs. Each ID becomes a model entry in WebUI. "
                 "Supports all official OpenAI model IDs and pseudo IDs.\n"
-                "Available text base models: gpt-6-sol, gpt-6-luna, gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna "
+                "Available text base models: gpt-6.1-sol, gpt-6-sol, gpt-6-luna, gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna "
                 "(released 2026-07-09; 'gpt-5.6' alias routes to Sol), gpt-5.5, gpt-5.4, "
                 "gpt-5.4-pro, gpt-5.4-mini, gpt-5.4-nano, gpt-5.3, gpt-5.3-chat-latest, "
                 "gpt-5.2, gpt-5.2-chat-latest, gpt-5, gpt-5-mini, gpt-5-nano, "
@@ -1263,6 +1270,18 @@ class Pipe:
                 "Expose/use GPT-6 Astra only; gpt-6-auto stays available without Astra. If your API key has no access, "
                 "direct Astra calls can still return model_not_found/permission errors from OpenAI."
             ),
+        )
+        ENABLE_GPT61_SOL_MODEL: bool = Field(
+            default=True,
+            description="Expose GPT-6.1 Sol and its fixed-model auto-effort alias, including saved model lists.",
+        )
+        PDF_NATIVE_INPUT: bool = Field(
+            default=True,
+            description="Send original chat PDF attachments directly to Responses as input_file. Disable Open WebUI File Context and Mistral extraction separately to prevent upstream processing.",
+        )
+        PDF_NATIVE_MAX_MB: int = Field(
+            default=50, ge=1, le=50,
+            description="Maximum total original PDF bytes per request (decimal MB). Oversized documents fail explicitly; never fall back to OCR/RAG.",
         )
         ENABLE_GPT6_SOL_LUNA_MODELS: bool = Field(
             default=True,
@@ -1746,6 +1765,12 @@ class Pipe:
                 model_ids.append("gpt-image-2.5-sunburst")
         else:
             model_ids = [m for m in model_ids if ModelFamily.base_model(m) != "gpt-image-2.5-sunburst"]
+        if self.valves.ENABLE_GPT61_SOL_MODEL:
+            for model in ("gpt-6.1-sol", "gpt-6.1-sol-auto"):
+                if model not in {ModelFamily._norm(m) for m in model_ids}:
+                    model_ids.append(model)
+        else:
+            model_ids = [m for m in model_ids if ModelFamily.base_model(m) != "gpt-6.1-sol"]
         new_models = ("gpt-6-sol", "gpt-6-luna", "gpt-6-sol-auto", "gpt-6-luna-auto")
         if self.valves.ENABLE_GPT6_SOL_LUNA_MODELS:
             existing = {ModelFamily._norm(m) for m in model_ids}
@@ -1946,6 +1971,11 @@ class Pipe:
                 files_arg=__files__,
             )
 
+        if valves.PDF_NATIVE_INPUT:
+            responses_body = await self._inject_native_pdf_context(
+                responses_body, valves, __user__, body, __metadata__, __files__, __event_emitter__
+            )
+
         # STEP 3: Normalize the Open WebUI 0.11 tool registry first, but delay
         # Responses tool construction until smart model routing is complete.
         __tools__ = await __tools__ if inspect.isawaitable(__tools__) else __tools__
@@ -1977,7 +2007,7 @@ class Pipe:
             responses_body.input = _strip_reasoning_items(responses_body.input)
 
         # Normalize legacy effort before capability/tool checks (minimal -> low).
-        if responses_body.model in {"gpt-6-astra", "gpt-6-sol", "gpt-6-luna"} and responses_body.reasoning:
+        if responses_body.model in {"gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol"} and responses_body.reasoning:
             if "effort" in responses_body.reasoning:
                 responses_body.reasoning = {
                     **responses_body.reasoning,
@@ -2016,7 +2046,7 @@ class Pipe:
         if ModelFamily.is_auto_reasoning(orig_model_norm):
             fixed_router = (
                 valves.GPT6_AUTO_ROUTER_MODEL
-                if ModelFamily.base_model(orig_model_norm) in {"gpt-6-astra", "gpt-6-sol", "gpt-6-luna"}
+                if ModelFamily.base_model(orig_model_norm) in {"gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol"}
                 else valves.AUTO_REASONING_ROUTER_MODEL
             )
             responses_body = await self._route_auto_reasoning(
@@ -2667,6 +2697,105 @@ class Pipe:
                 "mime_type": mime_type or mimetypes.guess_type(path.name)[0] or "application/octet-stream",
             })
         return resolved
+
+    async def _inject_native_pdf_context(
+        self, responses_body, valves, user_info, body, metadata, files_arg, event_emitter=None,
+    ):
+        """Read only DB-authorized storage keys; never trust client-provided paths.
+
+        WebUI upload-time extraction is configured outside the Pipe. This path
+        needs original binaries only and never invokes an OCR/extraction service.
+        Message files come from the active conversation passed by WebUI.
+        """
+        entries = []
+        for source in (files_arg, metadata.get("files"), body.get("files")):
+            if isinstance(source, list):
+                entries.extend(source)
+        for message in body.get("messages", []):
+            if isinstance(message, dict) and message.get("role") == "user":
+                if isinstance(message.get("files"), list):
+                    entries.extend(message["files"])
+        for entry in entries:
+            candidates = self._file_record_candidates(entry)
+            if any(str(obj.get("filename") or obj.get("name") or "").lower().endswith(".pdf")
+                   or obj.get("content_type") == "application/pdf" for obj in candidates):
+                if not _TerminalAttachmentTransfer._ids([entry]):
+                    raise ValueError("PDF 첨부 ID가 없습니다. 일반 대화에서 파일을 다시 첨부해 주세요.")
+        ids = list(dict.fromkeys(_TerminalAttachmentTransfer._ids(entries)))
+        if not ids:
+            return responses_body
+        from open_webui.models.files import Files
+        from open_webui.models.users import Users
+        from open_webui.utils.access_control.files import has_access_to_file
+        from open_webui.storage.provider import Storage
+        import base64
+        user = await _maybe_await(Users.get_user_by_id(user_info.get("id", "")))
+        if not user:
+            raise ValueError("PDF 원본 전송: 사용자를 확인하지 못했습니다.")
+        maximum = int(valves.PDF_NATIVE_MAX_MB) * 1_000_000
+        blocks = []
+        total = 0
+        for file_id in ids:
+            record = await _maybe_await(Files.get_file_by_id(file_id))
+            if not record:
+                raise ValueError("첨부 원본을 찾지 못했습니다. 파일을 다시 첨부해 주세요.")
+            if record.user_id != user.id and not await _maybe_await(has_access_to_file(file_id, "read", user)):
+                raise ValueError("첨부 원본에 접근할 수 없습니다.")
+            meta = record.meta or {}
+            filename = record.filename or "document.pdf"
+            if not (filename.lower().endswith(".pdf") or meta.get("content_type") == "application/pdf"):
+                continue
+            if not record.path:
+                raise ValueError("PDF 원본 저장 위치를 찾지 못했습니다. 파일을 다시 첨부해 주세요.")
+            try:
+                local = await asyncio.to_thread(Storage.get_file, record.path)
+                remaining = maximum - total
+                def read_pdf():
+                    with open(local, "rb") as source:
+                        return source.read(remaining + 1)
+                data = await asyncio.to_thread(read_pdf)
+            except Exception as exc:
+                raise ValueError("PDF 원본을 읽지 못했습니다. 서버의 파일 저장소를 확인해 주세요.") from exc
+            if not data or b"%PDF-" not in data[:1024]:
+                raise ValueError("첨부 파일이 유효한 PDF 원본이 아닙니다.")
+            total += len(data)
+            if len(data) >= 50_000_000 or total > maximum:
+                raise ValueError("PDF 원본 합계가 전송 한도를 초과했습니다. 파일을 나누어 첨부해 주세요.")
+            blocks.append({"type": "input_file", "filename": filename,
+                           "file_data": "data:application/pdf;base64," + base64.b64encode(data).decode("ascii")})
+        if not blocks:
+            return responses_body
+        if not isinstance(responses_body.input, list):
+            responses_body.input = [{"role": "user", "content": responses_body.input}]
+        latest = next((item for item in reversed(responses_body.input)
+                       if isinstance(item, dict) and item.get("role") == "user"), None)
+        if latest is None:
+            latest = {"role": "user", "content": []}
+            responses_body.input.append(latest)
+        if isinstance(latest.get("content"), str):
+            latest["content"] = [{"type": "input_text", "text": latest["content"]}]
+        latest.setdefault("content", [])
+        existing = {block.get("file_data") for item in responses_body.input if isinstance(item, dict)
+                    for block in (item.get("content") if isinstance(item.get("content"), list) else [])
+                    if isinstance(block, dict) and block.get("type") == "input_file"}
+        # Account for inline files already present in the conversation as well.
+        new_blocks = [block for block in blocks if block["file_data"] not in existing]
+        inline_files = [block for item in responses_body.input if isinstance(item, dict)
+                        for block in (item.get("content") if isinstance(item.get("content"), list) else [])
+                        if isinstance(block, dict) and block.get("type") == "input_file"] + new_blocks
+        inline_size = 0
+        for block in inline_files:
+            encoded = block.get("file_data")
+            if isinstance(encoded, str):
+                encoded = encoded.split(",", 1)[-1]
+                inline_size += len(encoded) * 3 // 4 - len(encoded) + len(encoded.rstrip("="))
+        if inline_size > maximum:
+            raise ValueError("대화의 파일 원본 합계가 전송 한도를 초과했습니다. 새 대화에서 파일을 나누어 첨부해 주세요.")
+        latest["content"].extend(new_blocks)
+        if event_emitter:
+            await event_emitter({"type": "status", "data": {
+                "description": f"PDF 원본 {len(blocks)}개를 API에 직접 전달합니다…", "done": False}})
+        return responses_body
 
     def _pdf_page_batches(self, path: Path, pages_per_batch: int) -> list[dict[str, Any]]:
         """Split a PDF into in-memory page-range PDFs; fall back to whole-file if pypdf cannot split."""
@@ -5056,7 +5185,7 @@ def _prepare_responses_request(params: Dict[str, Any]) -> Dict[str, Any]:
     for key in ("_auto_reasoning", "_auto_model_route", "_ocr_mode", "_auto_image"):
         body.pop(key, None)
     model = ModelFamily.base_model(str(body.get("model", "")))
-    if model not in {"gpt-6-astra", "gpt-6-sol", "gpt-6-luna"}:
+    if model not in {"gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol"}:
         return body
     body["model"] = model
     reasoning = dict(body.get("reasoning") or {})
