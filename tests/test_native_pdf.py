@@ -12,6 +12,7 @@ from test_responses import m, completed
 class NativePdfTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.pipe = m.Pipe()
+        self.pipe.valves.PDF_MISTRAL_PAGE_THRESHOLD = 0
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.raw = b'%PDF-1.7\noriginal scan bytes\n%%EOF'
@@ -40,7 +41,7 @@ class NativePdfTests(unittest.IsolatedAsyncioTestCase):
 
     async def inject(self, entries=None, body=None, metadata=None, value=None, **valves):
         result = m.ResponsesBody(model='gpt-6.1-sol', input=value if value is not None else 'read this')
-        return await self.pipe._inject_native_pdf_context(result, m.Pipe.Valves(**valves),
+        return await self.pipe._inject_native_pdf_context(result, m.Pipe.Valves(**{'PDF_MISTRAL_PAGE_THRESHOLD': 0, **valves}),
             {'id':'u'}, body or {}, metadata or {}, entries)
 
     async def test_all_pdf_bytes_nested_ids_deduplicated_mixed_media_preserved(self):
