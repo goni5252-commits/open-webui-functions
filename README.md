@@ -10,7 +10,7 @@ OpenWebUI 대화에서 **학교 양식으로 HWPX를 작성하고, 디자인을 
 
 | 다운로드 | 용도 |
 |---|---|
-| [OpenAI Responses v1.8.3 JSON](function-openai_responses-v1.8.3.json) · [직접 다운로드](https://raw.githubusercontent.com/goni5252-commits/open-webui-functions/main/function-openai_responses-v1.8.3.json) | 이 안내에서 사용하는 함수 |
+| [OpenAI Responses v1.8.4 JSON](function-openai_responses-v1.8.4.json) · [직접 다운로드](https://raw.githubusercontent.com/goni5252-commits/open-webui-functions/main/function-openai_responses-v1.8.4.json) | 이 안내에서 사용하는 함수 |
 | [엑셀 내보내기 v0.4.0 JSON](function-엑셀로_내보내기-v0.4.0.json) | 답변의 Markdown 표를 XLSX로 저장하는 Action (Open WebUI 0.11.4+) |
 | [한글 내보내기 v3.4.0 JSON](function-한글문서_내보내기-v3.4.0.json) | 기존 답변을 HWPX로 저장하는 Action (Open WebUI 0.11.4+) |
 | [Google Gemini v1.24.1 JSON](function-google_gemini-v1.24.1.json) | 별도 Gemini 함수 |
@@ -18,7 +18,11 @@ OpenWebUI 대화에서 **학교 양식으로 HWPX를 작성하고, 디자인을 
 
 [변경 내역](CHANGELOG.md) · [OpenAI 함수 Python 원본](functions/openai_responses.py)
 
-**GPT-6.1 Sol / PDF 페이지 수에 따른 처리 (v1.8.3)**
+**OpenWebUI 0.12.0 모델명 오류 수정 (v1.8.4)**
+
+`openai_responses_api_manifold.gpt-6-auto`가 API에 전달되어 `model_not_found`가 발생하는 문제를 수정했습니다. 설치된 함수 ID가 달라도 등록된 모델·별칭의 접두사를 제거합니다. 기존 함수의 편집 화면에서 최신 Python 원본을 적용하거나 아래 JSON 가져오기 절차를 사용하세요. 함수 ID가 `openai_responses_api_manifold`인 경우 JSON의 `openai_responses`와 다르므로 별도 함수가 생성될 수 있습니다. 기존 ID와 대화 연결을 유지하려면 기존 함수의 코드를 교체하고 저장하세요. 저장 후 모델을 다시 선택해 확인합니다. GitHub 업데이트만으로 서버에 자동 적용되지는 않습니다.
+
+**GPT-6.1 Sol / PDF 페이지 수에 따른 처리 (v1.8.4)**
 
 - `gpt-6.1-sol`, `gpt-6.1-sol-auto`를 선택할 수 있으며 저장된 모델 목록에도 자동 추가됩니다. `gpt-6-auto`의 Sol 단계와 기본 fallback도 `gpt-6.1-sol`입니다. Luna/Astra 선택 기준과 직접 선택하는 기존 Sol 모델은 유지합니다.
 - `PDF_NATIVE_INPUT=true`에서 PDF마다 페이지 수를 확인합니다. **49페이지까지는 PDF 원본을 OpenAI Responses에 직접 전달하고, 50페이지 이상은 Mistral OCR을 호출한 뒤 추출한 전체 텍스트·표를 전달합니다.** 여러 파일의 합계 페이지 수로 판단하지 않습니다.
@@ -31,7 +35,7 @@ OpenWebUI 대화에서 **학교 양식으로 HWPX를 작성하고, 디자인을 
 
 **적용 순서**
 
-1. 위 **OpenAI Responses v1.8.3 JSON**을 기존 함수에 가져옵니다.
+1. 위 **OpenAI Responses v1.8.4 JSON**을 기존 함수에 가져옵니다.
 2. 함수의 관리자 **Valves → `PDF_MISTRAL_API_KEY`**에 Mistral 키를 입력합니다. 비어 있으면 서버 환경변수 `MISTRAL_API_KEY`, `MISTRAL_OCR_API_KEY` 순으로 사용합니다. 기존 WebUI 문서 설정에 저장한 키는 자동으로 복사되지 않습니다. 키가 없을 때 짧은 PDF는 정상 전달되고, 50페이지 이상 PDF만 설정 오류로 안내합니다. 키를 채팅에 보내지 마세요.
 3. `PDF_MISTRAL_PAGE_THRESHOLD=50`을 확인합니다. OCR 모델 기본값은 `mistral-ocr-latest`, 주소는 `https://api.mistral.ai/v1`입니다. 특정 OCR 버전을 쓰려면 `PDF_MISTRAL_MODEL`에 지정합니다.
 4. **관리자 패널 → 설정 → 문서 → 콘텐츠 추출 엔진**은 `Mistral OCR` 대신 **`Default`**로 둡니다. 전역 Mistral 추출을 켜두면 함수가 페이지 수를 판단하기 전에 짧은 PDF도 Mistral로 보내져 이중 처리될 수 있습니다. Default는 WebUI의 로컬 추출이며 함수의 조건부 Mistral 호출과 별개입니다. 전역 엔진 변경은 다른 모델의 업로드에도 영향을 줍니다.
@@ -166,7 +170,7 @@ docker compose logs --tail 80 open-terminal
 
 ## 3. OpenWebUI에 함수 적용하기
 
-1. 위의 **OpenAI Responses v1.8.3 JSON**을 저장합니다. GitHub의 Raw/다운로드를 사용하고 웹페이지 HTML을 저장하지 마세요.
+1. 위의 **OpenAI Responses v1.8.4 JSON**을 저장합니다. GitHub의 Raw/다운로드를 사용하고 웹페이지 HTML을 저장하지 마세요.
 2. OpenWebUI의 **워크스페이스 → 함수**에서 가져오기 기능으로 JSON을 불러옵니다. 메뉴 명칭은 버전에 따라 조금 다를 수 있습니다.
 3. 함수를 활성화하고 Valve 설정에서 자신의 OpenAI API 키를 입력합니다. 이미 사용 중이면 기존 API 설정을 확인합니다.
 4. 아래 설정은 기본값을 유지하면 됩니다.
@@ -299,7 +303,7 @@ Open WebUI **0.11.4 이상**을 대상으로 합니다. 기존 함수와 설정�
 
 ## 8. 대화 중 이미지 생성·수정
 
-OpenAI Responses **v1.8.3**, Google Gemini **v1.24.1**부터 일반 대화 모델을 선택한 채 이미지 생성·수정을 요청할 수 있습니다. 두 함수의 최신 JSON을 각각 가져오고 활성화하세요. 별도 OpenWebUI 이미지 엔진이나 Terminal 설정은 필요하지 않습니다. GitHub 파일 업데이트가 서버에 설치된 함수를 자동 갱신하지는 않습니다.
+OpenAI Responses **v1.8.4**, Google Gemini **v1.24.1**부터 일반 대화 모델을 선택한 채 이미지 생성·수정을 요청할 수 있습니다. 두 함수의 최신 JSON을 각각 가져오고 활성화하세요. 별도 OpenWebUI 이미지 엔진이나 Terminal 설정은 필요하지 않습니다. GitHub 파일 업데이트가 서버에 설치된 함수를 자동 갱신하지는 않습니다.
 
 | 설정 | OpenAI | Gemini |
 |---|---|---|

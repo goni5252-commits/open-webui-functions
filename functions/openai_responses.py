@@ -5,8 +5,13 @@ author: originally written by jrkropp, editted by woogon kim
 git_url: https://github.com/jrkropp/open-webui-developer-toolkit/blob/main/functions/pipes/openai_responses_manifold/openai_responses_manifold.py
 description: Brings OpenAI Response API support to Open WebUI, enabling features not possible via Completions API.
 required_open_webui_version: 0.11.0
-version: 1.8.3
+version: 1.8.4
 license: MIT
+Changelog (v1.8.4):
+- Normalize registered model IDs under renamed Open WebUI manifold functions.
+- Use the request base model for routing when workspace metadata has a custom ID.
+- Preserve decimal model names and original metadata IDs used by chat history.
+
 Changelog (v1.8.3):
 - Use Mistral OCR for PDFs at or above a configurable page threshold (default 50).
 - Keep shorter PDFs native; cache validated OCR text per user and content for 30 minutes.
@@ -716,10 +721,18 @@ class ModelFamily:
     # ── tiny, intuitive helpers ──────────────────────────────────────────────
     @classmethod
     def _norm(cls, model_id: str) -> str:
-        m = (model_id or "").strip()
+        m = (model_id or "").strip().lower()
         if m.startswith(cls._PREFIX):
             m = m[len(cls._PREFIX):]
-        return cls._DATE_RE.sub("", m.lower())
+        else:
+            # WebUI passes <installed function id>.<model id>. Function IDs
+            # can differ after import/rename. Only strip a prefix whose suffix
+            # is a registered model/alias; never split bare gpt-6.1-sol at its dot.
+            _, separator, candidate = m.partition(".")
+            candidate = cls._DATE_RE.sub("", candidate)
+            if separator and (candidate in cls._SPECS or candidate in cls._ALIASES):
+                m = candidate
+        return cls._DATE_RE.sub("", m)
     @classmethod
     def base_model(cls, model_id: str) -> str:
         """Canonical base model id (aliases resolved; prefix/date stripped)."""
@@ -2005,7 +2018,9 @@ class Pipe:
         # Responses tool construction until smart model routing is complete.
         __tools__ = await __tools__ if inspect.isawaitable(__tools__) else __tools__
         owui_tool_registry = _normalize_owui_tool_registry(__tools__)
-        orig_model_norm = ModelFamily._norm(openwebui_model_id or str(body.get("model", "") or ""))
+        # WebUI resolves workspace models to their base in body; metadata may
+        # retain an unrelated custom ID. Keep metadata intact for chat history.
+        orig_model_norm = ModelFamily._norm(str(body.get("model", "") or openwebui_model_id))
         if ModelFamily.base_model(orig_model_norm) == "gpt-6-astra" and not bool(getattr(valves, "ENABLE_GPT6_ASTRA", True)):
             raise ValueError("GPT-6 Astra routes are disabled by ENABLE_GPT6_ASTRA")
 

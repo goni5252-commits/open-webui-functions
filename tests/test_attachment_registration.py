@@ -62,10 +62,11 @@ class RegistrationTests(unittest.IsolatedAsyncioTestCase):
         before,after=functions(json.loads(original.read_text())[0]["content"]),functions(new)
         changed={k for k,v in before.items() if after.get(k)!=v}
         # v1.8.1 adds model exposure and GPT-6.1 parameter compatibility.
+        # v1.8.4 normalizes renamed manifold IDs before model routing.
         self.assertEqual(changed,{'Pipe.pipe','Pipe._pipe_impl','Pipe._run_streaming_loop',
             'Pipe._run_ocr_model','Pipe._validate_ocr_result','ModelFamily.is_ocr_model',
             'Pipe._inject_native_hwpx_context','build_tools','Pipe.pipes',
-            'ModelFamily.reasoning_efforts','_prepare_responses_request',
+            'ModelFamily.reasoning_efforts','ModelFamily._norm','_prepare_responses_request',
             'Pipe._route_auto_model_and_reasoning','Pipe.__init__'})
 
 if __name__=='__main__': unittest.main()

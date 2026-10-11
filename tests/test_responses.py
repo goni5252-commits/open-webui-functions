@@ -189,6 +189,18 @@ class RoutingTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ConfigurationTests(unittest.TestCase):
+    def test_manifold_prefix_preserves_all_models_and_aliases(self):
+        for model in m.ModelFamily._SPECS.keys() | m.ModelFamily._ALIASES.keys():
+            for prefix in ("", "openai_responses.", "openai_responses_api_manifold.", "my_custom_pipe."):
+                with self.subTest(model=model, prefix=prefix):
+                    self.assertEqual(m.ModelFamily._norm(prefix + model), model)
+                    self.assertEqual(m.ModelFamily.base_model(prefix + model), m.ModelFamily.base_model(model))
+                    self.assertEqual(m.ModelFamily.params(prefix + model), m.ModelFamily.params(model))
+        self.assertEqual(m.ModelFamily._norm("my_pipe.gpt-6.1-sol-2026-09-01"), "gpt-6.1-sol")
+        self.assertEqual(m.ModelFamily._norm("vendor.unknown-model"), "vendor.unknown-model")
+        self.assertEqual(m.ModelFamily._norm("openai_responses.custom-model"), "custom-model")
+
+
     def test_saved_valves_migrate_without_touching_credentials_or_legacy(self):
         for policy in ("terra_first", "legacy", "sol_first"):
             with self.subTest(policy=policy):
@@ -362,18 +374,18 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
 
 class PipeIntegrationTests(unittest.IsolatedAsyncioTestCase):
     """Exercise the actual WebUI conversion/routing/tool-construction sequence."""
-    async def run_pipe(self, model, stream=True, settings=None, effort=None):
+    async def run_pipe(self, model, stream=True, settings=None, effort=None, prefix="openai_responses", metadata_id=None):
         pipe = m.Pipe()
         pipe.valves = m.Pipe.Valves(**(settings or {}))
         pipe.send_openai_responses_nonstreaming_request = AsyncMock(return_value=completed(json.dumps(decision())))
         pipe._run_streaming_loop = AsyncMock(return_value="stream result")
         pipe._run_nonstreaming_loop = AsyncMock(return_value="nonstream result")
-        body = {"model": "openai_responses." + model, "messages": [{"role": "user", "content": "Explain this algorithm"}],
+        body = {"model": prefix + "." + model, "messages": [{"role": "user", "content": "Explain this algorithm"}],
                 "stream": stream, "tool_choice": "auto", "temperature": 0.7}
         if effort:
             body["reasoning_effort"] = effort
         result = await pipe._pipe_impl(body, {"id": "test-user"}, None, AsyncMock(), None,
-                                       {"model": {"id": "openai_responses." + model}},
+                                       {"model": {"id": metadata_id or prefix + "." + model}},
                                        {"echo": {"spec": {"name": "echo", "parameters": {"type": "object", "properties": {}}}}})
         call = pipe._run_streaming_loop if stream else pipe._run_nonstreaming_loop
         return pipe, result, call.call_args.args[0]
@@ -386,6 +398,19 @@ class PipeIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(body.reasoning["effort"], "medium")
                 self.assertEqual({t["type"] for t in body.tools}, {"function", "web_search"})
                 self.assertEqual(pipe.send_openai_responses_nonstreaming_request.call_args.args[0]["model"], "gpt-6-luna")
+
+    async def test_renamed_manifold_auto_routes_in_both_ui_paths(self):
+        for prefix in ("openai_responses_api_manifold", "my_custom_pipe"):
+            for stream in (True, False):
+                with self.subTest(prefix=prefix, stream=stream):
+                    pipe, _, body = await self.run_pipe("gpt-6-auto", stream, prefix=prefix)
+                    self.assertEqual(body.model, "gpt-6.1-sol")
+                    pipe.send_openai_responses_nonstreaming_request.assert_awaited_once()
+
+    async def test_custom_model_metadata_keeps_body_auto_routing(self):
+        pipe, _, body = await self.run_pipe("gpt-6-auto", metadata_id="my-workspace-model")
+        self.assertEqual(body.model, "gpt-6.1-sol")
+        pipe.send_openai_responses_nonstreaming_request.assert_awaited_once()
 
     async def test_fixed_alias_uses_new_router_and_keeps_luna(self):
         pipe, result, body = await self.run_pipe("gpt-6-luna-auto")
