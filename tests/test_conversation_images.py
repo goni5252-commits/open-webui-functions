@@ -493,3 +493,74 @@ class GeminiFullPipelineTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class GeminiLatencyTests(unittest.IsolatedAsyncioTestCase):
+    setUp = GeminiFullPipelineTests.setUp
+    asyncTearDown = GeminiFullPipelineTests.asyncTearDown
+    response = GeminiFullPipelineTests.response
+
+    async def test_plain_chat_uses_stream_without_nonstream_generation(self):
+        nonstream = AsyncMock(side_effect=AssertionError('Unexpected nonstream request'))
+        chunks = object()
+        streaming = AsyncMock(return_value=chunks)
+        self.pipe._handle_streaming_response = lambda iterator, *args, **kwargs: iterator
+        with patch.object(self.client.aio.models, 'generate_content', nonstream), patch.object(
+                self.client.aio.models, 'generate_content_stream', streaming):
+            result = await self.pipe.pipe({'model': 'gemini-3.7-flash', 'stream': True,
+                                          'messages': [{'role': 'user', 'content': '광합성을 간단히 설명해줘'}]})
+        self.assertIs(result, chunks)
+        streaming.assert_awaited_once()
+        nonstream.assert_not_awaited()
+        self.assertFalse(any(callable(t) for t in streaming.call_args.kwargs['config'].tools or []))
+
+    async def test_search_only_has_one_call_even_with_unrelated_terminal_tools(self):
+        http = AsyncMock(return_value=self.response('오늘 날씨'))
+        terminal = {'display_file': {'type': 'terminal', 'tool_id': 'terminal:test',
+                                    'callable': AsyncMock()}}
+        with patch.object(self.client.aio.models, '_generate_content', http):
+            result = await self.pipe.pipe({'model': 'gemini-3.7-flash', 'messages': [
+                {'role': 'user', 'content': '오늘 서울 날씨를 검색해줘'}]},
+                __metadata__={'features': {'web_search': True}}, __tools__=terminal)
+        self.assertEqual(result, '오늘 날씨')
+        http.assert_awaited_once()
+        self.image_api.assert_not_awaited()
+
+    async def test_search_omitted_terminal_tools_do_not_disable_streaming(self):
+        streaming = AsyncMock(return_value=object())
+        self.pipe._handle_streaming_response = lambda iterator, *a, **k: iterator
+        with patch.object(self.client.aio.models, 'generate_content_stream', streaming):
+            await self.pipe.pipe({'model': 'gemini-3.7-flash', 'stream': True,
+                'messages': [{'role': 'user', 'content': '오늘 서울 날씨'}]},
+                __metadata__={'features': {'web_search': True}},
+                __tools__={'display_file': {'type': 'terminal', 'tool_id': 'terminal:test', 'callable': AsyncMock()}})
+        streaming.assert_awaited_once()
+
+    async def test_sdk_spec_enum_dispatch_and_rejection(self):
+        from google.genai import _extra_utils
+        session, api = ImageSessionTests().session(GeminiImages)
+        spec = session.tools()['conversation_image']['spec']
+        tool = Gemini._named_native_tool('conversation_image', session.run, set(), spec)
+        args = {'prompt': 'cat', 'operation': 'create', 'source_id': '', 'reference_ids': []}
+        converted = _extra_utils.convert_argument_from_function(args, tool)
+        self.assertTrue((await tool(**converted))['ok'])
+        bad = _extra_utils.convert_argument_from_function({**args, 'operation': 'invalid'}, tool)
+        self.assertFalse((await tool(**bad))['ok'])
+        api.assert_awaited_once()
+
+
+class GeminiImageSelectionTests(unittest.TestCase):
+    def test_local_selection_and_history(self):
+        pipe = object.__new__(Gemini)
+        pipe.valves = Gemini.Valves()
+        session = pytypes.SimpleNamespace(entries={})
+        cases = [('흰 고양이 유화 한장을 그려줘요', True), ('draw a cat', True),
+                 ('이미지 생성 프롬프트를 만들어줘', False), ('광합성을 설명해줘', False),
+                 ('최신 뉴스를 검색해줘', False), ('이미지를 생성하지 마', False)]
+        for content, expected in cases:
+            with self.subTest(content=content):
+                self.assertEqual(pipe._needs_conversation_images({'messages': [{'role': 'user', 'content': content}]}, session), expected)
+        session.entries['image-id'] = {}
+        self.assertTrue(pipe._needs_conversation_images({'messages': [{'role': 'user', 'content': '이번에는 수채화로'}]}, session))
+        pipe.valves.CONVERSATION_IMAGE_SMART_SELECTION = False
+        self.assertTrue(pipe._needs_conversation_images({'messages': [{'role': 'user', 'content': '안녕'}]}, pytypes.SimpleNamespace(entries={})))

@@ -4,10 +4,14 @@ author: owndev and olivier-lacroix. editied by goni5252
 author_url: https://github.com/owndev/
 project_url: https://github.com/owndev/Open-WebUI-Functions
 funding_url: https://github.com/sponsors/owndev
-version: 1.24.3
+version: 1.24.4
 required_open_webui_version: 0.9.0
 license: Apache License 2.0
 description: Google Gemini pipeline with Gemini 3.7 support, local Auto Thinking routing, automatic Google Search grounding, Nano Banana 2 image routing/editing, OCR, RAG bypass, and robust tool handling.
+changes_1_24_4:
+  - Avoid Literal runtime checks in SDK automatic tool argument conversion
+  - Select conversational image tools locally and stream tool-free requests
+  - Skip extra post-search model calls when image tools are unnecessary
 changes_1_24_3:
   - Preserve terminal file cards and events through Gemini tool calls and final responses
   - Retain user-export v1.24.2 tool spec signatures and argument validation
@@ -444,6 +448,10 @@ class Pipe:
         )
         ENABLE_CONVERSATION_IMAGES: bool = Field(
             default=True, description="Let Gemini text models call the configured image model through a native tool. Takes precedence over keyword auto routing; internal tools also work in legacy UI mode.")
+        CONVERSATION_IMAGE_SMART_SELECTION: bool = Field(
+            default=True,
+            description="Expose image tools for creation/editing intent or image history only. Disable to always expose them for ambiguous requests. No extra routing API call.",
+        )
         CONVERSATION_IMAGE_MAX_CALLS: int = Field(
             default=2, ge=1, le=4, description="Maximum image API attempts per message. No automatic retries of paid image calls.")
         AUTO_IMAGE_ROUTING: bool = Field(
@@ -4484,6 +4492,20 @@ class Pipe:
                         "Missing required tool arguments: " + ", ".join(missing)
                     )
                 if has_spec:
+                    # SDK AFC calls isinstance(value, annotation); Literal enums
+                    # raise TypeError there before our callable can execute.
+                    # Use concrete primitive annotations and enforce enums here.
+                    def validate_enum(value, schema):
+                        if "enum" in schema and value not in schema["enum"]:
+                            raise ValueError("Invalid enum tool argument")
+                        if isinstance(value, list):
+                            for item in value:
+                                validate_enum(item, schema.get("items", {}))
+                        elif isinstance(value, dict):
+                            for key, item in value.items():
+                                validate_enum(item, (schema.get("properties") or {}).get(key, {}))
+                    for key, value in public_args.items():
+                        validate_enum(value, properties.get(key, {}))
                     args, kwargs = (), public_args
                 bridge = (tool_def or {}).get("_terminal_bridge")
                 if bridge:
@@ -4551,13 +4573,9 @@ class Pipe:
         has_spec = isinstance(spec, dict) and isinstance(spec.get("parameters"), dict)
         required = []
         if has_spec:
-            from typing import Literal
-
             def schema_annotation(schema):
                 if not isinstance(schema, dict):
                     return Any
-                if schema.get("enum"):
-                    return Literal[tuple(schema["enum"])]
                 kind = schema.get("type")
                 if isinstance(kind, list):
                     options = [schema_annotation({**schema, "type": t}) for t in kind]
@@ -4602,6 +4620,8 @@ class Pipe:
                 description = str(parameter_schema.get("description") or key).replace(
                     "\n", " "
                 )
+                if "enum" in parameter_schema:
+                    description += " Allowed values: " + json.dumps(parameter_schema["enum"])
                 doc_lines.append(f"    {key}: {description}")
             signature = inspect.Signature(public_parameters)
             named_tool.__doc__ = "\n".join(doc_lines)
@@ -5986,6 +6006,29 @@ class Pipe:
             return bridge.final_response(result, body)
         return result
 
+    def _needs_conversation_images(self, body, session):
+        """Local, conservative selection; keep ambiguous image-history follow-ups."""
+        if not self.valves.CONVERSATION_IMAGE_SMART_SELECTION:
+            return True
+        text = self._last_user_text(body).lower()
+        # These requests ask for text about images, not image generation.
+        text_only = re.search(
+            r"(?:프롬프트|prompt|텍스트\s*추출|ocr|이미지\s*분석|사진\s*설명)", text
+        )
+        explicit_draw = re.search(r"그려|그리세요|그려주|\b(draw|paint|illustrate|render)\b", text)
+        if text_only and not explicit_draw:
+            return False
+        if re.search(r"(?:그리지|생성하지|만들지)\s*(?:마|말)|(?:do not|don't|never)\s+(?:draw|create|generate)", text):
+            return False
+        art_request = re.search(r"유화|수채화|스케치|oil painting|watercolor|sketch", text) and re.search(
+            r"만들|제작|생성|그려|\b(create|make|generate|paint|draw)\b", text
+        )
+        if explicit_draw or art_request or self._should_auto_image_route(text, bool(session.entries)):
+            return True
+        # No image bytes are loaded here. History keeps terse edits such as
+        # "a little warmer" and "이번에는 수채화로" available to the model.
+        return bool(session.entries)
+
     def _conversation_image_session(self, body, metadata, user, request, emitter):
         async def generate(prompt, operation, images):
             image_model = self._prepare_model_id(self.valves.AUTO_IMAGE_MODEL)
@@ -6098,7 +6141,10 @@ class Pipe:
             if (self.valves.ENABLE_CONVERSATION_IMAGES and not ocr_mode
                     and not is_background_task and model_id.startswith("gemini-")
                     and not self._check_image_generation_support(model_id)):
-                image_session = self._conversation_image_session(body, metadata, __user__, __request__, __event_emitter__)
+                candidate_session = self._conversation_image_session(body, metadata, __user__, __request__, __event_emitter__)
+                if self._needs_conversation_images(body, candidate_session):
+                    image_session = candidate_session
+            if image_session is not None:
                 if "conversation_image" in (__tools__ or {}):
                     raise ValueError("이미지 도구 이름 충돌: conversation_image")
                 __tools__ = {name: tool for name, tool in (__tools__ or {}).items()
@@ -6108,6 +6154,7 @@ class Pipe:
                     image_holder.append(image_session)
             if (
                 self.valves.AUTO_IMAGE_ROUTING
+                and not self.valves.ENABLE_CONVERSATION_IMAGES
                 and image_session is None
                 and not ocr_mode
                 and not is_background_task
@@ -6198,39 +6245,6 @@ class Pipe:
                 and (function_calling_mode != "legacy" or image_session is not None)
                 and not (ocr_mode and self.valves.OCR_DISABLE_NATIVE_TOOLS)
             )
-            if (
-                stream
-                and native_tools_active
-                and (self.valves.NATIVE_TOOL_STREAMING_SAFE_MODE or image_session is not None)
-                and not supports_image_generation
-            ):
-                self.log.info(
-                    "Request %s: forcing non-streaming mode because native tools are active",
-                    request_id,
-                )
-                stream = False
-                if __event_emitter__:
-                    try:
-                        await self._emit_optional(
-                            __event_emitter__,
-                            {
-                                "type": "status",
-                                "data": {
-                                    "action": "tool_call_safe_mode",
-                                    "description": (
-                                        "Gemini native tools detected; using reliable "
-                                        "non-streaming tool-call mode"
-                                    ),
-                                    "done": True,
-                                    "hidden": True,
-                                },
-                            },
-                        )
-                    except Exception as emit_error:
-                        self.log.debug(
-                            f"Failed to emit tool-call safe-mode status: {emit_error}"
-                        )
-
             messages = body.get("messages", [])
 
             # OCR always sends full attached PDFs; ordinary chat keeps its RAG valve.
@@ -6379,6 +6393,42 @@ class Pipe:
                 supports_image_generation,
                 model_id,
             )
+
+            native_tools_active = any(
+                callable(tool) for tool in (generation_config.tools or [])
+            )
+            if (
+                stream
+                and (native_tools_active or image_session is not None)
+                and (self.valves.NATIVE_TOOL_STREAMING_SAFE_MODE or image_session is not None)
+                and not supports_image_generation
+            ):
+                self.log.info(
+                    "Request %s: forcing non-streaming mode because native tools are active",
+                    request_id,
+                )
+                stream = False
+                if __event_emitter__:
+                    try:
+                        await self._emit_optional(
+                            __event_emitter__,
+                            {
+                                "type": "status",
+                                "data": {
+                                    "action": "tool_call_safe_mode",
+                                    "description": (
+                                        "Gemini native tools detected; using reliable "
+                                        "non-streaming tool-call mode"
+                                    ),
+                                    "done": True,
+                                    "hidden": True,
+                                },
+                            },
+                        )
+                    except Exception as emit_error:
+                        self.log.debug(
+                            f"Failed to emit tool-call safe-mode status: {emit_error}"
+                        )
 
             selected_reasoning_level = (
                 self.valves.OCR_THINKING_LEVEL
