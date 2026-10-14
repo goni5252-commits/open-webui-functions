@@ -1,5 +1,14 @@
 # 업데이트 내역
 
+## 2026-10-15 — Google Gemini v1.24.3
+
+- 첨부된 사용자 v1.24.2의 Open WebUI spec 기반 도구 인자 구성·필수 인자 검사를 보존하고, 저장소 v1.24.1에 파일 카드 표시 경로를 추가했습니다. 기존 버전별 배포 파일과 OpenAI 함수는 변경하지 않았습니다.
+- Gemini가 Terminal `display_file`을 실행하면 OpenWebUI의 파일 결과 변환·후처리·Terminal 이벤트를 연결합니다. 파일 카드용 function_call/output을 본문과 함께 반환하여 스트리밍/일반 응답 종료 때 카드가 사라지지 않도록 했습니다. 서버 helper가 없는 경우에도 Terminal selector·대화 ID·경로·MIME 정보를 유지합니다.
+- Terminal 출처가 확인된 도구만 연결하고 동일 이름의 Workspace/MCP 도구는 Terminal 카드로 오인하지 않습니다. 실패한 파일 결과는 카드로 표시하지 않으며, 성공 후 모델 응답 오류가 발생해도 이미 얻은 카드를 보존합니다. 요청별 상태를 사용하고 원래 도구 registry는 변경하지 않습니다.
+- 공식 OpenWebUI v0.12.0 middleware의 build_terminal_file_tool_result 계약을 확인했습니다: https://raw.githubusercontent.com/open-webui/open-webui/v0.12.0/backend/open_webui/utils/middleware.py
+- 검증: 전체 오프라인 테스트 200개 중 191개 통과·9개 생략(Google SDK 7개, Node 브라우저 계약 2개). 신규 6개 테스트로 도구 callable→카드→최종 응답, 양쪽 응답 모드, 오류/요청 분리, 필수 인자, 서버 후처리의 files/embeds 보존을 확인했습니다. 배포 JSON/원본·harness·diff 검사 완료.
+- 한계: 실제 OpenWebUI 서버 설치, 브라우저 카드 렌더링 및 유료 Gemini API 호출은 수행하지 않았습니다. 파일 생성 도구가 실제 성공한 display_file 결과를 반환해야 표시되며, 텍스트로만 생성했다고 응답한 과거 메시지에서 파일을 복원하지 않습니다. v1.24.3을 기존 Gemini 함수에 적용한 후 새 요청으로 확인해야 합니다.
+
 ## 2026-10-11 — OpenAI Responses v1.8.4
 
 - OpenWebUI 0.12.0 업데이트 후 보고된 `openai_responses_api_manifold.gpt-6-auto`의 `model_not_found` 오류를 수정했습니다. 기존 코드는 `openai_responses.`만 제거했습니다. 이제 설치된 함수 ID가 달라도 등록된 모델·별칭을 인식하며, 소수점 모델명과 날짜 접미사 처리를 유지합니다. 등록되지 않은 임의 접두사는 무조건 제거하지 않습니다.

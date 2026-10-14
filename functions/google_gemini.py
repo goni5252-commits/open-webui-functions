@@ -4,10 +4,16 @@ author: owndev and olivier-lacroix. editied by goni5252
 author_url: https://github.com/owndev/
 project_url: https://github.com/owndev/Open-WebUI-Functions
 funding_url: https://github.com/sponsors/owndev
-version: 1.24.1
+version: 1.24.3
 required_open_webui_version: 0.9.0
 license: Apache License 2.0
 description: Google Gemini pipeline with Gemini 3.7 support, local Auto Thinking routing, automatic Google Search grounding, Nano Banana 2 image routing/editing, OCR, RAG bypass, and robust tool handling.
+changes_1_24_3:
+  - Preserve terminal file cards and events through Gemini tool calls and final responses
+  - Retain user-export v1.24.2 tool spec signatures and argument validation
+changes_1_24_2:
+  - Build native tool signatures from Open WebUI spec parameters
+  - Validate required tool arguments before dispatch
 changes_1_24_1:
   - Resolve deferred callable annotations before Gemini SDK argument conversion
   - Preserve callable signatures without mutating shared tool functions
@@ -4449,7 +4455,7 @@ class Pipe:
         return result
 
     @staticmethod
-    def _named_native_tool(name, tool, used_names):
+    def _named_native_tool(name, tool, used_names, spec=None, tool_def=None):
         """Give each SDK callable a request-local name without mutating shared tools."""
         original_name = str(name)
         api_name = re.sub(r"[^A-Za-z0-9_]", "_", original_name)
@@ -4468,7 +4474,25 @@ class Pipe:
 
         async def named_tool(*args, **kwargs):
             try:
-                if inspect.iscoroutinefunction(tool):
+                bound = signature.bind(*args, **kwargs)
+                if not has_spec:
+                    bound.apply_defaults()
+                public_args = dict(bound.arguments)
+                missing = [key for key in required if key not in public_args]
+                if missing:
+                    raise ValueError(
+                        "Missing required tool arguments: " + ", ".join(missing)
+                    )
+                if has_spec:
+                    args, kwargs = (), public_args
+                bridge = (tool_def or {}).get("_terminal_bridge")
+                if bridge:
+                    result = await bridge.execute({
+                        "name": (spec or {}).get("name") or original_name,
+                        "arguments": json.dumps(public_args),
+                        "call_id": "gemini-" + uuid.uuid4().hex,
+                    }, tool_def)
+                elif inspect.iscoroutinefunction(tool):
                     result = await tool(*args, **kwargs)
                 else:
                     result = await asyncio.to_thread(tool, *args, **kwargs)
@@ -4494,12 +4518,15 @@ class Pipe:
         named_tool.__doc__ = getattr(tool, "__doc__", None) or original_name
         signature = inspect.signature(tool)
         annotations = dict(getattr(tool, "__annotations__", {}) or {})
-        if any(isinstance(p.annotation, str) for p in signature.parameters.values()) or isinstance(signature.return_annotation, str):
+        if any(
+            isinstance(p.annotation, str) for p in signature.parameters.values()
+        ) or isinstance(signature.return_annotation, str):
             # Dynamic exec loaders may inherit postponed annotations. Schema
             # discovery accepts strings, but SDK AFC argument conversion can pass
             # them to isinstance(). Resolve against the ORIGINAL callable globals,
             # then replace __signature__ as well as __annotations__ on our wrapper.
             from typing import get_type_hints
+
             try:
                 resolved = get_type_hints(tool)
                 parameters = []
@@ -4511,10 +4538,73 @@ class Pipe:
                 return_annotation = resolved.get("return", signature.return_annotation)
                 if isinstance(return_annotation, str):
                     raise TypeError("Unresolved return annotation")
-                signature = signature.replace(parameters=parameters, return_annotation=return_annotation)
+                signature = signature.replace(
+                    parameters=parameters, return_annotation=return_annotation
+                )
                 annotations.update(resolved)
             except (NameError, TypeError, ValueError) as exc:
-                raise ValueError(f"Cannot resolve Gemini tool parameter types for {api_name}: {exc}") from exc
+                raise ValueError(
+                    f"Cannot resolve Gemini tool parameter types for {api_name}: {exc}"
+                ) from exc
+        # OpenAPI/MCP callables often expose only **kwargs. Their Open WebUI
+        # spec is authoritative; introspection alone can create a zero-arg tool.
+        has_spec = isinstance(spec, dict) and isinstance(spec.get("parameters"), dict)
+        required = []
+        if has_spec:
+            from typing import Literal
+
+            def schema_annotation(schema):
+                if not isinstance(schema, dict):
+                    return Any
+                if schema.get("enum"):
+                    return Literal[tuple(schema["enum"])]
+                kind = schema.get("type")
+                if isinstance(kind, list):
+                    options = [schema_annotation({**schema, "type": t}) for t in kind]
+                    return Union[tuple(options)]
+                if kind == "array":
+                    return List[schema_annotation(schema.get("items", {}))]
+                return {
+                    "string": str,
+                    "integer": int,
+                    "number": float,
+                    "boolean": bool,
+                    "object": Dict[str, Any],
+                    "null": type(None),
+                }.get(kind, Any)
+
+            schema = spec["parameters"]
+            properties = schema.get("properties") or {}
+            required = list(schema.get("required") or [])
+            if any(key not in properties for key in required):
+                raise ValueError(
+                    f"Invalid required parameters in tool spec: {api_name}"
+                )
+            public_parameters = []
+            annotations = {}
+            doc_lines = [str(spec.get("description") or original_name), "", "Args:"]
+            for key, parameter_schema in properties.items():
+                annotation = schema_annotation(parameter_schema)
+                default = (
+                    inspect.Parameter.empty
+                    if key in required
+                    else parameter_schema.get("default", None)
+                )
+                public_parameters.append(
+                    inspect.Parameter(
+                        key,
+                        inspect.Parameter.KEYWORD_ONLY,
+                        annotation=annotation,
+                        default=default,
+                    )
+                )
+                annotations[key] = annotation
+                description = str(parameter_schema.get("description") or key).replace(
+                    "\n", " "
+                )
+                doc_lines.append(f"    {key}: {description}")
+            signature = inspect.Signature(public_parameters)
+            named_tool.__doc__ = "\n".join(doc_lines)
         named_tool.__annotations__ = annotations
         named_tool.__signature__ = signature
         return named_tool
@@ -4969,7 +5059,7 @@ class Pipe:
                         continue
                     signature = getattr(tool, "__signature__", None)
                     self.log.debug(f"Adding tool '{name}' with signature {signature}")
-                    tools.append(self._named_native_tool(name, tool, used_tool_names))
+                    tools.append(self._named_native_tool(name, tool, used_tool_names, tool_def.get("spec"), tool_def))
 
         if tools:
             gen_config_params["tools"] = tools
@@ -5859,11 +5949,27 @@ class Pipe:
         __event_emitter__: Optional[Callable] = None, __tools__: dict[str, Any] | None = None,
         __request__: Optional[Request] = None, __user__: Optional[dict] = None,
         __task__: Optional[str] = None,
+        __event_call__: Optional[Callable] = None,
     ) -> Union[str, Dict[str, Any], AsyncIterator[Union[str, Dict[str, Any]]]]:
         holder = []
         metadata = dict(__metadata__ or {})
         if __task__:
             metadata["task"] = __task__
+        bridge = None
+        if not metadata.get("task") and any(
+            isinstance(tool, dict) and _is_terminal_tool(tool)
+            for tool in (__tools__ or {}).values()
+        ):
+            bridge = _TerminalBridge(__event_emitter__, {
+                "__metadata__": metadata, "__request__": __request__,
+                "__user__": __user__, "__event_call__": __event_call__,
+            })
+            __tools__ = {
+                name: {**tool, "_terminal_bridge": bridge}
+                if isinstance(tool, dict) and _is_terminal_tool(tool) else tool
+                for name, tool in __tools__.items()
+            }
+            __event_emitter__ = bridge.emit
         result = await self._conversation_pipe_impl(body, metadata, __event_emitter__, __tools__,
                                                      __request__, __user__, holder)
         if holder:
@@ -5873,6 +5979,11 @@ class Pipe:
                     result += "\n\n" + images
                 elif isinstance(result, dict):
                     result["choices"][0]["message"]["content"] += "\n\n" + images
+        if bridge and bridge.output:
+            if isinstance(result, dict):
+                bridge.usage = result.get("usage") or bridge.usage
+                result = result.get("choices", [{}])[0].get("message", {}).get("content", "")
+            return bridge.final_response(result, body)
         return result
 
     def _conversation_image_session(self, body, metadata, user, request, emitter):
@@ -6974,3 +7085,215 @@ class _ConversationImages:
             self.cache[key] = result
             await self._notify("이미지 작업 완료" if result["ok"] else "이미지 작업 실패: " + result["error"], True)
             return result
+
+
+async def _maybe_await(value):
+    return await value if inspect.isawaitable(value) else value
+
+
+def _is_terminal_tool(tool):
+    """Use OWUI provenance, never a function name shared by Workspace/MCP tools."""
+    return bool(
+        tool.get("type") == "terminal"
+        or str(tool.get("tool_id", "")).startswith("terminal:")
+        or (tool.get("server") or {}).get("is_terminal") is True
+    )
+
+
+def _terminal_helper(module, name):
+    """Optional and lazy: older installations must still load the Function."""
+    try:
+        import importlib
+        return getattr(importlib.import_module(module), name, None)
+    except Exception:
+        return None
+
+
+class _TerminalBridge:
+    """Request-local adapter for OWUI 0.11.4's structured output renderer."""
+    def __init__(self, emitter, context):
+        self.emitter = emitter
+        self.context = {**context, "__event_emitter__": self.emit}
+        self.output = []
+        self.text = ""
+        self.usage = None
+
+    def snapshot(self):
+        return [*self.output, {
+            "type": "message", "id": "terminal-bridge-text", "role": "assistant",
+            "status": "completed",
+            "content": [{"type": "output_text", "text": self.text}],
+        }]
+
+    def final_response(self, result, body):
+        """Feed the same output to OWUI middleware so finalization cannot erase cards.
+
+        functions.py emits a returned dict verbatim. The streaming middleware
+        understands response.completed; the nonstream path accepts choices + output.
+        Completed calls always include matching results to prevent re-execution.
+        """
+        if isinstance(result, str) and result:
+            self.text = result
+        usage = {"usage": self.usage} if self.usage else {}
+        if body.get("stream", False):
+            return {"type": "response.completed", "response": {
+                "object": "response", "status": "completed", "output": self.snapshot(),
+                **usage,
+            }}
+        return {"object": "chat.completion", "model": body.get("model"),
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": self.text},
+                         "finish_reason": "stop"}],
+            "output": self.snapshot(), **usage,
+        }
+
+    async def emit(self, event):
+        kind = event.get("type")
+        data = event.get("data") or {}
+        if kind == "chat:completion" and data.get("usage"):
+            self.usage = data["usage"]
+        if kind in ("chat:message", "chat:completion"):
+            content = data.get("content")
+            if isinstance(content, str) and (content or kind == "chat:message"):
+                self.text = content
+            if self.output:
+                # output replaces message.content in OWUI; always include the text.
+                # Empty final completion content must not erase the streamed answer.
+                output = self.snapshot()
+                event = {**event, "type": "chat:completion",
+                         "data": {**data, "output": output}}
+        if self.emitter:
+            await self.emitter(event)
+
+    async def execute(self, call, tool):
+        import copy
+        from uuid import uuid4
+        name = call["name"]
+        args = json.loads(call["arguments"])
+        if not isinstance(args, dict):
+            raise ValueError("Terminal tool arguments must be a JSON object")
+        metadata = self.context.get("__metadata__") or {}
+        direct = bool(tool.get("direct"))
+        middleware = "open_webui.utils.middleware"
+        if direct:
+            event_call = self.context.get("__event_call__")
+            if not event_call:
+                return "Error: Browser session is not connected for this direct tool."
+            result = await event_call({"type": "execute:tool", "data": {
+                "id": str(uuid4()), "name": name, "params": args,
+                "server": tool.get("server", {}), "session_id": metadata.get("session_id"),
+            }})
+        else:
+            fn = tool["callable"]
+            update = _terminal_helper("open_webui.utils.tools", "get_updated_tool_function")
+            if update:
+                try:
+                    fn = await _maybe_await(update(function=fn, extra_params=self.context))
+                except Exception:
+                    # Only helper setup is retried; never execute a tool twice.
+                    fn = tool["callable"]
+            params = dict(args)
+            if name == "display_file":
+                params.pop("inline", None)
+                params.pop("page", None)
+            if inspect.iscoroutinefunction(fn):
+                result = await fn(**params)
+            else:
+                result = await asyncio.to_thread(fn, **params)
+                if inspect.isawaitable(result):
+                    result = await result
+
+        # aiohttp returns CIMultiDictProxy headers, not a dict. They also cannot
+        # be deep-copied. Normalize only the transport envelope before processing.
+        from collections.abc import Mapping
+        raw = result
+        if isinstance(raw, (tuple, list)) and len(raw) == 2 and isinstance(raw[1], Mapping):
+            payload, headers = raw
+            result = [payload, dict(headers)] if isinstance(raw, list) else (payload, dict(headers))
+            raw = payload
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except (TypeError, ValueError):
+                pass
+        failed = isinstance(raw, dict) and (
+            raw.get("exists") is False or bool(raw.get("error"))
+            or raw.get("success") is False or raw.get("ok") is False
+            or raw.get("status") in ("error", "failed")
+        )
+        structured = None
+        builder = _terminal_helper(middleware, "build_terminal_file_tool_result")
+        if name == "display_file" and isinstance(raw, dict) and not failed:
+            if builder:
+                try:
+                    structured = builder(name, args, copy.deepcopy(raw), tool, metadata)
+                except Exception:
+                    pass
+            if not structured:
+                # Same selector contract as 0.11.4; no invented URL or raw HTTP call.
+                import mimetypes
+                import os
+                terminal_id = metadata.get("terminal_id")
+                if str(tool.get("tool_id", "")).startswith("terminal:"):
+                    terminal_id = tool["tool_id"].split(":", 1)[1]
+                url = (tool.get("server") or {}).get("url")
+                path = raw.get("path") or args.get("path")
+                if (terminal_id or url) and path:
+                    mime = raw.get("mime_type") or raw.get("content_type") or mimetypes.guess_type(path)[0] or "application/octet-stream"
+                    structured = {**raw, "type": "file", "source": "open_terminal",
+                        "terminal_selector": terminal_id or url,
+                        "session_id": metadata.get("chat_id"), "path": path,
+                        "full_path": raw.get("full_path") or path,
+                        "name": raw.get("name") or os.path.basename(path),
+                        "mime_type": mime, "content_type": mime,
+                        **({"terminal_id": terminal_id} if terminal_id else {"terminal_url": url}),
+                        **({"displayed": True} if args.get("inline") is True else {}),
+                        **({"page": args["page"]} if args.get("page") else {}),
+                    }
+        processed = structured if structured is not None else result
+        files, embeds = [], []
+        processor = _terminal_helper(middleware, "process_tool_result")
+        if processor:
+            try:
+                processed, files, embeds = await processor(
+                    self.context.get("__request__"), name, copy.deepcopy(processed),
+                    tool.get("type", "terminal"), direct, metadata, self.context.get("__user__"),
+                )
+            except Exception:
+                processed = structured if structured is not None else raw
+        else:
+            processed = structured if structured is not None else raw
+        text = processed if isinstance(processed, str) else json.dumps(processed, ensure_ascii=False, default=str)
+        # UI metadata belongs only in the UI output, never the OpenAI request.
+        if structured is not None or files or embeds:
+            self.output.extend([
+                {"type": "function_call", "id": call.get("id", call["call_id"]),
+                 "call_id": call["call_id"], "name": name, "arguments": call["arguments"], "status": "completed"},
+                {"type": "function_call_output", "call_id": call["call_id"],
+                 "id": "terminal-result-" + call["call_id"], "status": "completed",
+                 "output": [{"type": "input_text", "text": text}],
+                 **({"files": files} if files else {}), **({"embeds": embeds} if embeds else {})},
+            ])
+            await self.emit({"type": "chat:completion", "data": {"done": False}})
+        handler = _terminal_helper(middleware, "terminal_event_handler")
+        event_ok = not failed and not (
+            isinstance(raw, str) and raw.lstrip().lower().startswith(("error", "exception", "traceback"))
+        )
+        if name == "display_file" and not isinstance(raw, dict):
+            event_ok = False
+        if event_ok:
+            if handler:
+                try:
+                    await handler(name, args, text, self.emit)
+                except Exception:
+                    # A UI failure must not cause a successful tool to execute again.
+                    pass
+            else:
+                path = (raw.get("path") if isinstance(raw, dict) else None) or args.get("path")
+                if name == "run_command":
+                    await self.emit({"type": "terminal:run_command", "data": {}})
+                elif path and name in ("display_file", "write_file", "replace_file_content"):
+                    if name != "display_file" or args.get("inline") is not True:
+                        await self.emit({"type": "terminal:" + name, "data": {
+                            "path": path, **({"page": args["page"]} if args.get("page") else {}),
+                        }})
+        return text

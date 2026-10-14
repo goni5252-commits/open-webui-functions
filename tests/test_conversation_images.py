@@ -21,6 +21,7 @@ import sys
 import time
 import types as pytypes
 import unittest
+import uuid
 from unittest.mock import AsyncMock, patch
 from collections.abc import Mapping
 from contextvars import ContextVar
@@ -55,7 +56,7 @@ def load_gemini_helpers():
     # Reproduce dynamic loaders inheriting postponed annotations. The previous
     # test compiled this helper separately without that flag and missed AFC failure.
     exec(compile(ast.fix_missing_locations(ast.Module(body=[future, common], type_ignores=[])), str(path), 'exec'), ns)
-    exec(compile(ast.fix_missing_locations(ast.Module(body=[future] + constants + [pipe], type_ignores=[])), str(path), 'exec'), ns)
+    exec(compile(ast.fix_missing_locations(ast.Module(body=[future] + constants + [n for n in tree.body if getattr(n, "name", "") in {"_is_terminal_tool", "_terminal_helper", "_TerminalBridge", "_maybe_await"}] + [pipe], type_ignores=[])), str(path), 'exec'), ns)
     ns['Pipe'].Valves.model_rebuild(_types_namespace=ns)
     return ns['Pipe'], ns['_ConversationImages']
 
