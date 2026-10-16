@@ -74,6 +74,66 @@ class RoutingTests(unittest.IsolatedAsyncioTestCase):
             "gpt-6-luna", body, valves or m.Pipe.Valves(), public_alias=alias, routing_hint=hint
         )
 
+    @staticmethod
+    def image_prompt(text="풀어줘"):
+        return [{"role": "user", "content": [
+            {"type": "input_text", "text": text},
+            {"type": "input_image", "image_url": "data:image/png;base64,dGVzdA==", "detail": "high"}]}]
+
+    async def test_visual_solving_overrides_simple_luna_classification(self):
+        data = dict(decision("gpt-6-luna", "none", kind="simple"),
+                    visual_content="other", visual_task="literal_extraction", visual_readability="readable")
+        for prompt in ("풀어줘", "풀이 검토해줘", "solve this", ""):
+            body = await self.route(data, prompt=self.image_prompt(prompt))
+            self.assertEqual((body.model, body.reasoning["effort"]), ("gpt-6.1-sol", "medium"))
+            self.assertEqual(body.model_router_result["router_image_count"], 1)
+
+    async def test_visual_math_high_and_ceiling(self):
+        data = dict(decision("gpt-6-luna", "none", kind="simple"),
+                    visual_content="math_science", visual_task="reasoning", visual_readability="readable")
+        body = await self.route(data, prompt=self.image_prompt())
+        self.assertEqual((body.model, body.reasoning["effort"]), ("gpt-6.1-sol", "high"))
+        body = await self.route(data, prompt=self.image_prompt(), valves=m.Pipe.Valves(GPT6_AUTO_MAX_TARGET="luna"))
+        self.assertEqual(body.model, "gpt-6-luna")
+        data.update(target_model="gpt-6-astra", task_class="agentic_exceptional")
+        body = await self.route(data, prompt=self.image_prompt())
+        self.assertEqual(body.model, "gpt-6-astra")
+        data.update(target_model="gpt-6-luna", task_class="routine", visual_content="other", visual_task="literal_extraction")
+        body = await self.route(data, prompt=self.image_prompt("수학 모의고사 풀어줘"))
+        self.assertEqual((body.model, body.reasoning["effort"]), ("gpt-6.1-sol", "high"))
+
+    async def test_visual_extraction_and_uncertainty(self):
+        data = dict(decision("gpt-6-luna", "none", kind="simple"),
+                    visual_content="math_science", visual_task="literal_extraction", visual_readability="readable")
+        body = await self.route(data, prompt=self.image_prompt("글자만 추출해줘"))
+        self.assertEqual(body.model, "gpt-6-luna")
+        data["visual_readability"] = "uncertain"
+        body = await self.route(data, prompt=self.image_prompt("글자만 추출해줘"))
+        self.assertEqual(body.model, "gpt-6.1-sol")
+
+    async def test_visual_invalid_result_and_luna_fallback_are_guarded(self):
+        for result in ("{}", json.dumps(decision("gpt-6-luna", kind="simple"))):
+            body = await self.route(response=completed(result), prompt=self.image_prompt(),
+                                    valves=m.Pipe.Valves(GPT6_AUTO_FALLBACK_TARGET="luna"))
+            self.assertEqual(body.model, "gpt-6.1-sol")
+            self.assertTrue(body.model_router_result["fallback"])
+
+    async def test_image_followup_wire_and_unrelated_request(self):
+        prompt = self.image_prompt()
+        prompt += [{"role": "assistant", "content": "A difficult problem."}, {"role": "user", "content": "다시 풀어줘"}]
+        before = copy.deepcopy(prompt)
+        data = dict(decision("gpt-6-luna", kind="simple"), visual_content="math_science",
+                    visual_task="reasoning", visual_readability="readable")
+        body = await self.route(data, prompt=prompt)
+        self.assertEqual(body.model, "gpt-6.1-sol")
+        wire = self.pipe.send_openai_responses_nonstreaming_request.call_args.args[0]
+        self.assertIn("data:image/png", json.dumps(wire["input"]))
+        self.assertEqual(prompt, before)
+        prompt[-1]["content"] = "고마워"
+        data.update(visual_task="unrelated")
+        body = await self.route(data, prompt=prompt)
+        self.assertEqual(body.model, "gpt-6-luna")
+
     async def test_new_family_only_and_router_schema(self):
         body = await self.route()
         self.assertEqual(body.model, "gpt-6.1-sol")
@@ -268,6 +328,18 @@ class ConfigurationTests(unittest.TestCase):
         items = [{"type": "reasoning", "encrypted_content": "test"}, {"role": "user", "content": "hi"},
                  {"type": "function_call_output", "call_id": "call_1", "output": "result"}]
         self.assertEqual(m._strip_reasoning_items(items), items[1:])
+
+    def test_router_media_history_is_bounded_and_new_media_supersedes(self):
+        items = RoutingTests.image_prompt()
+        items.extend([{"role": "user", "content": "continue"}] * 2)
+        self.assertEqual(m._build_router_input(items, True)["forwarded_images"], 1)
+        items.append({"role": "user", "content": "new topic"})
+        self.assertEqual(m._build_router_input(items, True)["forwarded_images"], 0)
+        items = RoutingTests.image_prompt() + [{"role": "user", "content": [{"type": "input_file", "file_id": "new"}]}]
+        routed = m._build_router_input(items, True)
+        self.assertEqual(routed["forwarded_images"], 0)
+        self.assertNotIn("data:image", json.dumps(routed["messages"]))
+        self.assertEqual(m._build_router_input(RoutingTests.image_prompt(), False)["forwarded_images"], 0)
 
     def test_router_receives_context_and_latest_media(self):
         items = [{"role": "user", "content": [{"type": "input_image", "image_url": "old"}]},

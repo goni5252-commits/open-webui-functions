@@ -5,8 +5,13 @@ author: originally written by jrkropp, editted by woogon kim
 git_url: https://github.com/jrkropp/open-webui-developer-toolkit/blob/main/functions/pipes/openai_responses_manifold/openai_responses_manifold.py
 description: Brings OpenAI Response API support to Open WebUI, enabling features not possible via Completions API.
 required_open_webui_version: 0.11.0
-version: 1.8.4
+version: 1.8.5
 license: MIT
+Changelog (v1.8.5):
+- Preserve recent image context for follow-up routing.
+- Require visual task/readability classification; default image reasoning and uncertainty to Sol.
+- Guard explicit solving requests against Luna misclassification and preserve configured ceilings.
+
 Changelog (v1.8.4):
 - Normalize registered model IDs under renamed Open WebUI manifold functions.
 - Use the request base model for routing when workspace metadata has a custom ID.
@@ -4471,6 +4476,16 @@ class Pipe:
             return ""
 
         latest_router_text = _latest_router_text()
+        visual_routing = sol_first and router_input.get("forwarded_images", 0) > 0
+        # User intent is independent of the classifier's potentially incorrect labels.
+        visual_solving = visual_routing and bool(re.search(
+            r"풀어|풀어줘|풀이|해설|증명|정답|답을|계산|검산|해결|solve|solution|prove|proof|calculate|verify",
+            latest_router_text, re.IGNORECASE,
+        ))
+        visual_math = visual_solving and bool(re.search(
+            r"수학|모의고사|수능|기하|미적분|방정식|math|geometry|calculus|equation",
+            latest_router_text, re.IGNORECASE,
+        ))
 
         def _high_confidence_professional_task(text: str) -> bool:
             if not text:
@@ -4604,6 +4619,23 @@ class Pipe:
             router_properties["route_kind"] = {"type": "string", "enum": ["trivial", "mechanical_batch", "simple", "substantive"]}
             router_required.append("route_kind")
 
+        if visual_routing:
+            for key, choices in {
+                "visual_content": ["math_science", "other", "uncertain"],
+                "visual_task": ["literal_extraction", "simple_description", "reasoning", "unrelated", "uncertain"],
+                "visual_readability": ["readable", "uncertain"],
+            }.items():
+                router_properties[key] = {"type": "string", "enum": choices}
+                router_required.append(key)
+            attachment_hint += (
+                " Inspect the actual image before classifying. Report visual_content, visual_task and visual_readability."
+                " Solving an exam problem, deriving an answer, explaining a solution or checking correctness is reasoning,"
+                " never literal extraction, even when the user says only '풀어줘' or sends only a problem screenshot."
+                " Math/science reasoning uses hard_reasoning and high effort. If unreadable or uncertain, use Sol;"
+                " do not assume simplicity. literal_extraction means copying/transcribing without solving."
+                " unrelated means the latest request clearly does not concern the earlier image."
+            )
+
         router_body = {
             "model": router_model,
             "reasoning": {"effort": "low"},
@@ -4660,13 +4692,41 @@ class Pipe:
                 target_model, value, ceiling=ceiling, fallback=fallback_effort_setting
             )
 
-        def apply_route(target_model: str, effort: str, explanation: str, task_class: str = "routine", route_kind: str = "substantive", fallback: bool = False) -> None:
+        def apply_route(target_model: str, effort: str, explanation: str, task_class: str = "routine", route_kind: str = "substantive", fallback: bool = False, visual: Optional[dict] = None) -> None:
             target_model = clamp_model(target_model)
             task_class = str(task_class or "routine").lower().strip()
             if task_class not in {"routine", "professional", "hard_reasoning", "agentic_exceptional"}:
                 task_class = "routine"
 
             floor_reason = ""
+            visual = visual or {}
+            simple_visual_intent = bool(re.search(
+                r"옮겨|추출|전사|텍스트로|글자|적혀|묘사|무엇|뭐야|ocr|transcrib|extract|describe|what is",
+                latest_router_text, re.IGNORECASE,
+            ))
+            simple_visual = (
+                visual.get("visual_task") in {"literal_extraction", "simple_description"}
+                and simple_visual_intent
+            ) or (
+                visual.get("visual_task") == "unrelated"
+                and router_input.get("attachments_from_history", False)
+            )
+            visual_floor = visual_routing and (
+                visual_solving or fallback
+                or visual.get("visual_readability") != "readable"
+                or visual.get("visual_content") == "uncertain"
+                or not simple_visual
+            )
+            if visual_floor:
+                target_model = model_order[max(model_order.index(target_model), model_order.index(clamp_model("sol")))]
+                hard_visual = visual_math or (
+                    visual.get("visual_content") == "math_science"
+                    and (visual_solving or visual.get("visual_task") == "reasoning")
+                )
+                if hard_visual and task_class != "agentic_exceptional":
+                    task_class = "hard_reasoning"
+                effort = "high" if hard_visual else (effort if effort in {"medium", "high"} else "medium")
+                floor_reason = "Visual reasoning/uncertainty Sol floor (subject to configured ceiling)"
 
             if sol_first and not fallback:
                 # Enforce semantic classification, retaining explicit model ceilings.
@@ -4718,6 +4778,8 @@ class Pipe:
                 "policy": "sol_first" if sol_first else "legacy",
                 "route_kind": route_kind if sol_first else None,
                 "fallback": fallback,
+                "visual_assessment": visual if visual_routing else None,
+                "router_image_count": router_input.get("forwarded_images", 0),
                 "task_class": task_class,
                 "explanation": final_explanation,
             }
@@ -4769,6 +4831,7 @@ class Pipe:
                 str(data.get("explanation", "automatic model and effort routing")),
                 str(data.get("task_class", "routine")),
                 str(data.get("route_kind", "substantive")),
+                visual={key: data[key] for key in ("visual_content", "visual_task", "visual_readability")} if visual_routing else None,
             )
         except Exception as exc:
             self.logger.warning(
@@ -5348,17 +5411,16 @@ def _build_router_input(
     """
     Pre-process the Responses API input for the auto-reasoning router.
     v1.3.2: gained `include_attachments`. When True, image (input_image)
-    and file (input_file) blocks from the LATEST user message are passed
+    and file (input_file) blocks from the latest user attachment turn are passed
     through to the router so it can inspect the actual attachment content
-    (exam problem vs. casual photo, dense document vs. simple receipt)
-    when deciding reasoning effort. Attachments from OLDER turns are still
-    stripped — this bounds router cost while covering the common case
-    (user attaches something and asks about it in the same message).
+    when deciding reasoning effort. Text-only follow-ups retain the nearest
+    attachment turn within the last three user turns; older media is stripped.
+    A new attachment turn supersedes previous media.
     When False (legacy behavior), all attachments are stripped and only
     counts are reported.
     Returns a dict:
         {
-            "messages":   [...],   # input for the router (text + latest-turn attachments)
+            "messages":   [...],   # text + selected recent attachments
             "has_images": bool,
             "has_files":  bool,
             "num_images": int,
@@ -5376,11 +5438,18 @@ def _build_router_input(
     num_images = 0
     num_files = 0
     router_messages: List[Dict[str, Any]] = []
-    # Index of the latest user message — only its attachments are forwarded.
-    last_user_idx = -1
-    for i, m in enumerate(original_input):
-        if isinstance(m, dict) and m.get("role") == "user":
-            last_user_idx = i
+    forwarded_images = 0
+    user_indices = [i for i, msg in enumerate(original_input)
+                    if isinstance(msg, dict) and msg.get("role") == "user"]
+    attachment_idx = -1
+    for i in reversed(user_indices[-3:]):
+        content = original_input[i].get("content")
+        if isinstance(content, list) and any(
+            isinstance(block, dict) and block.get("type") in {"input_image", "image_url", "input_file"}
+            for block in content
+        ):
+            attachment_idx = i
+            break
     for idx, msg in enumerate(original_input):
         role = msg.get("role", "")
         content = msg.get("content")
@@ -5404,9 +5473,7 @@ def _build_router_input(
                 router_messages.append({"role": role, "content": content})
             continue
         # User messages: extract text blocks, count images/files.
-        # v1.3.2: attachments from the LATEST user message are forwarded
-        # (when include_attachments=True) so the router sees their content.
-        forward_attachments = include_attachments and idx == last_user_idx
+        forward_attachments = include_attachments and idx == attachment_idx
         if isinstance(content, str):
             router_messages.append({"role": "user", "content": [{"type": "input_text", "text": content}]})
             continue
@@ -5431,6 +5498,7 @@ def _build_router_input(
                                 normalized[key] = block.get(key)
                         if len(normalized) > 1:
                             out_blocks.append(normalized)
+                            forwarded_images += 1
                     else:
                         # Completions-style image_url block -> Responses input_image.
                         img = block.get("image_url", {})
@@ -5445,6 +5513,7 @@ def _build_router_input(
                             if detail:
                                 normalized["detail"] = detail
                             out_blocks.append(normalized)
+                            forwarded_images += 1
             elif btype == "input_file":
                 num_files += 1
                 if forward_attachments:
@@ -5465,6 +5534,8 @@ def _build_router_input(
             router_messages.append({"role": "user", "content": out_blocks})
     return {
         "messages": router_messages,
+        "attachments_from_history": attachment_idx >= 0 and attachment_idx != user_indices[-1],
+        "forwarded_images": forwarded_images,
         "has_images": num_images > 0,
         "has_files": num_files > 0,
         "num_images": num_images,

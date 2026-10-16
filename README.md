@@ -10,13 +10,20 @@ OpenWebUI 대화에서 **학교 양식으로 HWPX를 작성하고, 디자인을 
 
 | 다운로드 | 용도 |
 |---|---|
-| [OpenAI Responses v1.8.4 JSON](function-openai_responses-v1.8.4.json) · [직접 다운로드](https://raw.githubusercontent.com/goni5252-commits/open-webui-functions/main/function-openai_responses-v1.8.4.json) | 이 안내에서 사용하는 함수 |
+| [OpenAI Responses v1.8.5 JSON](function-openai_responses-v1.8.5.json) · [직접 다운로드](https://raw.githubusercontent.com/goni5252-commits/open-webui-functions/main/function-openai_responses-v1.8.5.json) | 이 안내에서 사용하는 함수 |
 | [엑셀 내보내기 v0.4.0 JSON](function-엑셀로_내보내기-v0.4.0.json) | 답변의 Markdown 표를 XLSX로 저장하는 Action (Open WebUI 0.11.4+) |
 | [한글 내보내기 v3.4.0 JSON](function-한글문서_내보내기-v3.4.0.json) | 기존 답변을 HWPX로 저장하는 Action (Open WebUI 0.11.4+) |
 | [Google Gemini v1.24.1 JSON](function-google_gemini-v1.24.1.json) | 별도 Gemini 함수 |
 | [Gemini RAG Bypass JSON](function-google_gemini_rag_bypass.json) | 별도 RAG Bypass 함수 |
 
 [변경 내역](CHANGELOG.md) · [OpenAI 함수 Python 원본](functions/openai_responses.py)
+
+**이미지 문제 풀이 자동 라우팅 보강 (v1.8.5)**
+
+- `gpt-6-auto`에서 이미지 풀이·증명·정답 검토와 불확실한 시각 입력은 최소 GPT-6.1 Sol로 처리합니다. 수학·과학 추론으로 판별되거나 수학 풀이가 명시된 요청은 `high` 추론을 사용합니다. 이미지 속 문제를 쉬운 작업으로 오판하더라도 명시적인 풀이 요청은 Luna로 내려가지 않습니다.
+- 명확한 글자 추출·간단한 묘사는 Luna를 사용할 수 있습니다. 사진만 보내는 모호한 요청은 Sol을 기본으로 합니다. 사진을 보낸 뒤 “풀어줘”라고 해도 최근 3개 사용자 메시지 안의 마지막 첨부를 라우터가 받으며, 새 첨부가 있으면 이전 첨부를 대체합니다. 해당 범위 밖의 사진은 다시 첨부하세요.
+- 관리자 `GPT6_AUTO_MAX_TARGET=luna` 제한은 그대로 존중합니다. Sol 승격을 사용하려면 `sol` 또는 `astra`로 설정하세요. `gpt-6-luna-auto`는 Luna 고정 옵션이며 모델 자동 선택에는 `gpt-6-auto`를 사용합니다.
+- 최근 첨부를 다시 읽으므로 후속 질문의 라우팅 입력 비용이 증가할 수 있습니다. 실제 사진의 난도 분류 정확도는 별도 실사용 확인이 필요합니다.
 
 **OpenWebUI 0.12.0 모델명 오류 수정 (v1.8.4)**
 
@@ -35,7 +42,7 @@ OpenWebUI 대화에서 **학교 양식으로 HWPX를 작성하고, 디자인을 
 
 **적용 순서**
 
-1. 위 **OpenAI Responses v1.8.4 JSON**을 기존 함수에 가져옵니다.
+1. 위 **OpenAI Responses v1.8.5 JSON**을 기존 함수에 가져옵니다.
 2. 함수의 관리자 **Valves → `PDF_MISTRAL_API_KEY`**에 Mistral 키를 입력합니다. 비어 있으면 서버 환경변수 `MISTRAL_API_KEY`, `MISTRAL_OCR_API_KEY` 순으로 사용합니다. 기존 WebUI 문서 설정에 저장한 키는 자동으로 복사되지 않습니다. 키가 없을 때 짧은 PDF는 정상 전달되고, 50페이지 이상 PDF만 설정 오류로 안내합니다. 키를 채팅에 보내지 마세요.
 3. `PDF_MISTRAL_PAGE_THRESHOLD=50`을 확인합니다. OCR 모델 기본값은 `mistral-ocr-latest`, 주소는 `https://api.mistral.ai/v1`입니다. 특정 OCR 버전을 쓰려면 `PDF_MISTRAL_MODEL`에 지정합니다.
 4. **관리자 패널 → 설정 → 문서 → 콘텐츠 추출 엔진**은 `Mistral OCR` 대신 **`Default`**로 둡니다. 전역 Mistral 추출을 켜두면 함수가 페이지 수를 판단하기 전에 짧은 PDF도 Mistral로 보내져 이중 처리될 수 있습니다. Default는 WebUI의 로컬 추출이며 함수의 조건부 Mistral 호출과 별개입니다. 전역 엔진 변경은 다른 모델의 업로드에도 영향을 줍니다.
@@ -170,7 +177,7 @@ docker compose logs --tail 80 open-terminal
 
 ## 3. OpenWebUI에 함수 적용하기
 
-1. 위의 **OpenAI Responses v1.8.4 JSON**을 저장합니다. GitHub의 Raw/다운로드를 사용하고 웹페이지 HTML을 저장하지 마세요.
+1. 위의 **OpenAI Responses v1.8.5 JSON**을 저장합니다. GitHub의 Raw/다운로드를 사용하고 웹페이지 HTML을 저장하지 마세요.
 2. OpenWebUI의 **워크스페이스 → 함수**에서 가져오기 기능으로 JSON을 불러옵니다. 메뉴 명칭은 버전에 따라 조금 다를 수 있습니다.
 3. 함수를 활성화하고 Valve 설정에서 자신의 OpenAI API 키를 입력합니다. 이미 사용 중이면 기존 API 설정을 확인합니다.
 4. 아래 설정은 기본값을 유지하면 됩니다.
