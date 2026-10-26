@@ -1,16 +1,42 @@
-# Open Terminal 하네스 1.1.0 설치 / Responses 1.7.8 이전
+# Open Terminal 하네스 1.2.0 설치 / Responses 1.7.8 이전
 
 이 패키지는 Open Terminal에 설치합니다. Windows/WSL 또는 OpenWebUI 컨테이너에만 파일을 두면 Terminal 도구에서 읽을 수 없습니다. 함수 JSON과 하네스를 둘 다 적용해야 합니다.
+
+## 기존 학교 GPT에 생기부 스킬 추가하기 (1.2.0)
+
+이 버전은 im-not-ai의 일부 윤문 규칙을 각색한 `student-record-writing`을 추가합니다. 전체 원본 플러그인이나 탐지 엔진 설치가 아닙니다. 학교 GPT가 이미 이 하네스와 연결된 경우 함수 JSON을 다시 가져오지 않아도 catalog에서 새 스킬을 발견할 수 있습니다.
+
+1. 아래 1절로 **새 v1.2.0 폴더**에 패키지를 내려받고 해시를 확인합니다. 이전 core 폴더와 학교 site 폴더는 유지합니다.
+2. 기존 Compose의 core bind source만 `C:/OpenWebUI/harness/v1.2.0/openwebui-harness`로 변경합니다(WSL은 `/mnt/c/...`). 기존 site, 홈 볼륨, 사용자·네트워크 설정은 유지합니다. 3절처럼 설정을 검증하고 실제 Open Terminal 서비스만 재생성합니다.
+3. 기존 Responses 함수에서 `ENABLE_TERMINAL_HARNESS=True`, `TERMINAL_HARNESS_ROOT=/opt/openwebui-harness`, `TERMINAL_HARNESS_ENTRYPOINT=AGENTS.md`를 확인합니다. 학교 site를 이미 연결했다면 `TERMINAL_HARNESS_SITE_ROOT`의 기존 값을 유지합니다.
+4. 학교 GPT의 **사용자 대화 Terminal**에서 아래 명령을 실행합니다. site 경로는 실제 설정으로 맞추며 site를 사용하지 않으면 옵션을 생략합니다.
+
+```text
+python3 /opt/openwebui-harness/scripts/harness.py validate --site-root /opt/openwebui-site
+python3 /opt/openwebui-harness/scripts/harness.py catalog --site-root /opt/openwebui-site
+```
+
+catalog의 활성 skills에 `student-record-writing`과 읽을 수 있는 entrypoint가 있어야 합니다. site에서 같은 id를 비활성화하거나 override했다면 학교 설정이 우선합니다. 목록 확인만으로 모델이 지침을 따르는지 검증한 것은 아닙니다.
+
+새 대화에서 다음처럼 시험합니다(가상 관찰 메모):
+
+> Terminal 하네스의 student-record-writing 스킬을 읽고 다음 메모로 세특 초안을 작성해 줘. 모둠 실험에서 측정값을 3회 비교하고 결과 표를 작성함. 사실을 추가하지 않고 '~함' 문체를 유지하며 반복 표현을 다듬어 줘.
+
+확인 기준: 실제 SKILL.md 읽기 → 3회 비교·결과 표 작성 보존 → 원문에 없는 리더십·성취 추가 없음 → 교사 관찰 문체 유지. 기존 초안 윤문, 근거가 부족한 평가, 여러 학생 자료 분리도 실제 모델로 확인합니다. 이 패키지는 학년도별 기재요령을 내장하지 않습니다. 학교 지침은 기존 site에서 관리하세요.
+
+자동 선택이 되지 않는 다른 함수/모델은 관리 지침에 “생기부·세특 작성 또는 윤문 시 Terminal의 공통 AGENTS.md와 catalog를 읽고 student-record-writing을 사용한다”를 연결하고 실제 읽기까지 확인해야 합니다. 생기부 요청마다 원본 저장소를 클론하거나 install.sh를 실행할 필요는 없습니다.
+
+GitHub 게시만으로 학교 서버가 업데이트되지는 않습니다. 설치 실패 시 기존 core bind source로 복원하고 해당 Terminal 서비스만 다시 올립니다.
 
 ## 1. Windows 서버에 패키지 받기
 
 서버 Windows PowerShell에서 실행합니다. 같은 버전이 이미 설치된 경우 기존 폴더를 덮어쓰지 말고 먼저 내용을 확인하세요.
 
 ```powershell
-$harnessInstall = 'C:\OpenWebUI\harness\v1.1.0'
+$harnessInstall = 'C:\OpenWebUI\harness\v1.2.0'
 New-Item -ItemType Directory -Path $harnessInstall -Force | Out-Null
-Invoke-WebRequest 'https://raw.githubusercontent.com/goni5252-commits/open-webui-functions/main/harness/open-terminal-harness-v1.1.0.zip' -OutFile "$harnessInstall\package.zip"
-Invoke-WebRequest 'https://raw.githubusercontent.com/goni5252-commits/open-webui-functions/main/harness/open-terminal-harness-v1.1.0.zip.sha256' -OutFile "$harnessInstall\package.zip.sha256"
+Invoke-WebRequest 'https://raw.githubusercontent.com/goni5252-commits/open-webui-functions/main/harness/open-terminal-harness-v1.2.0.zip' -OutFile "$harnessInstall\package.zip"
+Invoke-WebRequest 'https://raw.githubusercontent.com/goni5252-commits/open-webui-functions/main/harness/open-terminal-harness-v1.2.0.zip.sha256' -OutFile "$harnessInstall\package.zip.sha256"
 $expectedHash = ((Get-Content "$harnessInstall\package.zip.sha256") -split '\s+')[0]
 if ((Get-FileHash "$harnessInstall\package.zip" -Algorithm SHA256).Hash -ne $expectedHash) { throw '하네스 SHA-256 불일치' }
 Expand-Archive -LiteralPath "$harnessInstall\package.zip" -DestinationPath $harnessInstall
@@ -40,7 +66,7 @@ services:
     volumes:
       # 기존 volumes 항목도 여기에 유지
       - type: bind
-        source: C:/OpenWebUI/harness/v1.1.0/openwebui-harness
+        source: C:/OpenWebUI/harness/v1.2.0/openwebui-harness
         target: /opt/openwebui-harness
         read_only: true
       - type: bind
@@ -49,7 +75,7 @@ services:
         read_only: true
 ```
 
-Windows PowerShell에서 Docker Desktop Compose를 실행할 때의 source 예시입니다. WSL 쉘에서 Compose를 실행한다면 source를 각각 `/mnt/c/OpenWebUI/harness/v1.1.0/openwebui-harness`, `/mnt/c/OpenWebUI/site`로 사용합니다.
+Windows PowerShell에서 Docker Desktop Compose를 실행할 때의 source 예시입니다. WSL 쉘에서 Compose를 실행한다면 source를 각각 `/mnt/c/OpenWebUI/harness/v1.2.0/openwebui-harness`, `/mnt/c/OpenWebUI/site`로 사용합니다.
 
 Compose 파일이 있는 폴더에서:
 

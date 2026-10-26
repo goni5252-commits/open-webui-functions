@@ -13,7 +13,7 @@ class SharedHarnessTests(unittest.TestCase):
     def test_core_catalog_and_missing_optional_site(self):
         result = h.catalog(ROOT, '/nonexistent-site-test')
         self.assertEqual(result['site_status'], 'not_installed')
-        self.assertEqual(len(result['skills']), 6)
+        self.assertEqual(len(result['skills']), 7)
         self.assertIn('hwpx', [v['id'] for v in result['skills']])
         self.assertEqual(result['templates'], [])
 

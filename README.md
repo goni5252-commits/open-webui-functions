@@ -10,6 +10,7 @@ OpenWebUI 대화에서 **학교 양식으로 HWPX를 작성하고, 디자인을 
 
 | 다운로드 | 용도 |
 |---|---|
+| [생기부 윤문 하네스 v1.2.0](harness/open-terminal-harness-v1.2.0.zip) · [설치 안내](harness/open-terminal/INSTALL.md) | im-not-ai 규칙 일부를 각색한 생기부·세특 작성/윤문 스킬 |
 | [OpenAI Responses v1.8.5 JSON](function-openai_responses-v1.8.5.json) · [직접 다운로드](https://raw.githubusercontent.com/goni5252-commits/open-webui-functions/main/function-openai_responses-v1.8.5.json) | 이 안내에서 사용하는 함수 |
 | [엑셀 내보내기 v0.4.0 JSON](function-엑셀로_내보내기-v0.4.0.json) | 답변의 Markdown 표를 XLSX로 저장하는 Action (Open WebUI 0.11.4+) |
 | [한글 내보내기 v3.4.0 JSON](function-한글문서_내보내기-v3.4.0.json) | 기존 답변을 HWPX로 저장하는 Action (Open WebUI 0.11.4+) |
