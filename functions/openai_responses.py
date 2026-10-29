@@ -5,8 +5,12 @@ author: originally written by jrkropp, editted by woogon kim
 git_url: https://github.com/jrkropp/open-webui-developer-toolkit/blob/main/functions/pipes/openai_responses_manifold/openai_responses_manifold.py
 description: Brings OpenAI Response API support to Open WebUI, enabling features not possible via Completions API.
 required_open_webui_version: 0.11.0
-version: 1.8.6
+version: 1.8.7
 license: MIT
+Changelog (v1.8.7):
+- Translate all administrator Valve descriptions into Korean; retain existing Korean user descriptions.
+- Preserve setting keys, defaults, validation, routing and API behavior.
+
 Changelog (v1.8.6):
 - Replace the smart-auto Luna response tier with GPT-6.1 Terra; keep Sol as default.
 - Prefer Terra for bounded token-heavy implementation/batch work; retain Sol reasoning and visual floors.
@@ -1230,11 +1234,11 @@ class Pipe:
         # Connection & Auth
         BASE_URL: str = Field(
             default=((os.getenv("OPENAI_API_BASE_URL") or "").strip() or "https://api.openai.com/v1"),
-            description="The base URL to use with the OpenAI SDK. Defaults to the official OpenAI API endpoint. Supports LiteLLM and other custom endpoints.",
+            description="OpenAI API 연결에 사용할 기본 URL입니다. 기본값은 공식 OpenAI API 주소이며, LiteLLM 등 사용자 지정 API 주소도 지원합니다.",
         )
         API_KEY: str = Field(
             default=(os.getenv("OPENAI_API_KEY") or "").strip() or "sk-xxxxx",
-            description="Your OpenAI API key. Defaults to the value of the OPENAI_API_KEY environment variable.",
+            description="OpenAI API 키입니다. 기본값은 OPENAI_API_KEY 환경변수에서 가져옵니다.",
         )
         REQUEST_TIMEOUT_SECONDS: int = Field(
             default=900, ge=30, le=7200,
@@ -1244,40 +1248,23 @@ class Pipe:
         MODEL_ID: str = Field(
             default="gpt-6.1-sol, gpt-6.1-sol-auto, gpt-6-auto, gpt-6-sol, gpt-6-luna, gpt-6-sol-auto, gpt-6-luna-auto, gpt-6-astra-auto, gpt-6-astra, gpt-6-ocr, gpt-5.6-sol-auto, gpt-5.6-terra-auto, gpt-5.6-luna-auto, gpt-5.6-auto, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-5.4, gpt-5.4-thinking, gpt-5.4-mini, gpt-5.4-nano, gpt-5.3-chat-latest, gpt-5-mini, gpt-image-2.5-flare, gpt-image-2.5-sunburst, gpt-image-2",
             description=(
-                "Comma separated OpenAI model IDs. Each ID becomes a model entry in WebUI. "
-                "Supports all official OpenAI model IDs and pseudo IDs.\n"
-                "Available text base models: gpt-6.1-sol, gpt-6-sol, gpt-6-luna, gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna "
-                "(released 2026-07-09; 'gpt-5.6' alias routes to Sol), gpt-5.5, gpt-5.4, "
-                "gpt-5.4-pro, gpt-5.4-mini, gpt-5.4-nano, gpt-5.3, gpt-5.3-chat-latest, "
-                "gpt-5.2, gpt-5.2-chat-latest, gpt-5, gpt-5-mini, gpt-5-nano, "
-                "gpt-5-chat-latest.\n"
-                "NOTE (v1.3.2): all GPT-6 and GPT-5.6 models attach OpenAI web_search by default "
-                "(grounded answers for date/weather/news questions), regardless of the "
-                "ENABLE_WEB_SEARCH_TOOL valve below.\n"
-                "Available dedicated IMAGE models: gpt-image-2.5-flare, gpt-image-2.5-sunburst, gpt-image-2, "
-                "gpt-image-1.5. When selected, requests go directly to /images/generations "
-                "(or /images/edits if an image is attached). Quality and size are configurable "
-                "per-user via the chat-UI 밸브 button (v1.2.7+) and per-instance via the "
-                "IMAGE_QUALITY / IMAGE_SIZE Valves below.\n"
-                "OCR model: gpt-6-ocr uses Luna-first native image/file passthrough, RAG-message bypass, "
-                "PDF batching and GPT-6 Sol fallback. External tools/web search are disabled in OCR mode.\n"
-                "Automatic models: gpt-6-auto chooses GPT-6.1 Terra / GPT-6.1 Sol / GPT-6 Astra with GPT-6.1 Sol as the default and Astra reserved for exceptional work; "
-                "gpt-6-sol-auto, gpt-6-luna-auto and gpt-6-astra-auto keep the selected model fixed and auto-select effort. gpt-5.6-auto remains "
-                "strictly Luna/Terra/Sol for backward-compatible cost control. gpt-5.6-sol-auto, "
-                "gpt-5.6-terra-auto and gpt-5.6-luna-auto "
-                "keep their base model fixed and auto-select reasoning effort only. All routers "
-                "inspect the latest text/image/file input. gpt-5.4 thinking aliases remain available.\n"
-                "Legacy o-series and gpt-4 models have been removed."
+                "쉼표로 구분한 OpenAI 모델 ID 목록입니다. 각 ID가 WebUI의 모델 항목으로 표시됩니다. 공식 OpenAI 모델 ID와 이 함수의 가상 모델 ID를 지원합니다.\n"
+                "사용 가능한 기본 텍스트 모델: gpt-6.1-sol, gpt-6-sol, gpt-6-luna, gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna(2026-07-09 출시, gpt-5.6 별칭은 Sol로 연결), gpt-5.5, gpt-5.4, gpt-5.4-pro, gpt-5.4-mini, gpt-5.4-nano, gpt-5.3, gpt-5.3-chat-latest, gpt-5.2, gpt-5.2-chat-latest, gpt-5, gpt-5-mini, gpt-5-nano, gpt-5-chat-latest.\n"
+                "참고(v1.3.2): 모든 GPT-6 및 GPT-5.6 모델에는 아래 ENABLE_WEB_SEARCH_TOOL 설정과 관계없이 OpenAI web_search가 기본으로 연결됩니다. 날짜·날씨·뉴스 질문에 근거를 확인한 답변을 제공하기 위한 기능입니다.\n"
+                "이미지 전용 모델: gpt-image-2.5-flare, gpt-image-2.5-sunburst, gpt-image-2, gpt-image-1.5. 선택 시 /images/generations로 직접 요청하며, 이미지가 첨부되면 /images/edits를 사용합니다. 이미지 품질과 크기는 대화 화면의 밸브 버튼(v1.2.7 이상)에서 사용자별로, 아래 IMAGE_QUALITY / IMAGE_SIZE에서 관리자 기본값으로 설정할 수 있습니다.\n"
+                "OCR 모델: gpt-6-ocr는 이미지·파일 원본을 Luna에 우선 전달하고, RAG 메시지를 우회하며, PDF를 묶음 처리합니다. 실패 시 GPT-6 Sol로 재시도합니다. OCR 모드에서는 외부 도구와 웹 검색을 사용하지 않습니다.\n"
+                "자동 모델: gpt-6-auto는 GPT-6.1 Sol을 기본으로 GPT-6.1 Terra / GPT-6.1 Sol / GPT-6 Astra 중에서 선택하며, Astra는 예외적으로 어려운 작업에만 사용합니다. gpt-6-sol-auto, gpt-6-luna-auto, gpt-6-astra-auto는 모델을 고정하고 추론 강도만 자동 선택합니다. gpt-5.6-auto는 기존 비용 제어를 유지하기 위해 Luna/Terra/Sol만 선택합니다. gpt-5.6-sol-auto, gpt-5.6-terra-auto, gpt-5.6-luna-auto도 기본 모델을 고정하고 추론 강도만 자동 선택합니다. 모든 라우터는 최신 텍스트·이미지·파일 입력을 확인합니다. gpt-5.4 추론 별칭도 계속 사용할 수 있습니다.\n"
+                "기존 o-series 및 gpt-4 모델은 제거되었습니다."
             ),
         )
         # Reasoning & summaries
         REASONING_SUMMARY: Literal["auto", "concise", "detailed", "disabled"] = Field(
             default="disabled",
-            description="REQUIRES VERIFIED OPENAI ORG. Visible reasoning summary (auto | concise | detailed | disabled). Works on GPT-5 family reasoning models; ignored otherwise. Docs: https://platform.openai.com/docs/api-reference/responses/create#responses-create-reasoning",
+            description="OpenAI 조직 인증이 필요합니다. 화면에 표시할 추론 요약을 선택합니다: auto(자동), concise(간결), detailed(상세), disabled(사용 안 함). GPT-5 계열 추론 모델에서 작동하며, 그 외에는 무시됩니다. 문서: https://platform.openai.com/docs/api-reference/responses/create#responses-create-reasoning",
         )
         PERSIST_REASONING_TOKENS: Literal["response", "conversation", "disabled"] = Field(
             default="disabled",
-            description="REQUIRES VERIFIED OPENAI ORG. If verified, highly recommend using 'response' or 'conversation' for best results. If `disabled` (default) = never request encrypted reasoning tokens; if `response` = request tokens so the model can carry reasoning across tool calls for the current response; If `conversation` = also persist tokens for future messages in this chat (higher token usage; quality may vary).",
+            description="OpenAI 조직 인증이 필요합니다. 인증된 조직은 더 나은 결과를 위해 response 또는 conversation 사용을 권장합니다. disabled(기본값): 암호화된 추론 토큰을 요청하지 않습니다. response: 현재 답변의 도구 호출 사이에서 추론을 이어가도록 토큰을 요청합니다. conversation: 이후 대화에서도 사용할 수 있도록 토큰을 저장합니다(토큰 사용량 증가, 품질은 달라질 수 있음).",
         )
         @model_validator(mode="before")
         @classmethod
@@ -1300,43 +1287,42 @@ class Pipe:
         ENABLE_GPT6_ASTRA: bool = Field(
             default=True,
             description=(
-                "Expose/use GPT-6 Astra only; gpt-6-auto stays available without Astra. If your API key has no access, "
-                "direct Astra calls can still return model_not_found/permission errors from OpenAI."
+                "GPT-6 Astra의 표시 및 사용 여부를 설정합니다. 꺼도 gpt-6-auto는 계속 사용할 수 있습니다. API 키에 접근 권한이 없으면 Astra 직접 호출 시 OpenAI에서 model_not_found 또는 권한 오류가 발생할 수 있습니다."
             ),
         )
         ENABLE_GPT61_SOL_MODEL: bool = Field(
             default=True,
-            description="Expose GPT-6.1 Sol and its fixed-model auto-effort alias, including saved model lists.",
+            description="GPT-6.1 Sol과 모델을 고정하고 추론 강도만 자동 선택하는 별칭을 표시합니다. 기존에 저장된 모델 목록에도 적용됩니다.",
         )
         PDF_NATIVE_INPUT: bool = Field(
             default=True,
-            description="Handle chat PDFs here: shorter PDFs as original input_file, longer PDFs via Mistral OCR. Disable WebUI File Context and global Mistral extraction separately.",
+            description="대화에 첨부된 PDF를 이 함수에서 처리합니다. 짧은 PDF는 원본 input_file로, 긴 PDF는 Mistral OCR로 전달합니다. WebUI의 File Context와 전역 Mistral 추출은 별도로 꺼야 합니다.",
         )
         PDF_MISTRAL_PAGE_THRESHOLD: int = Field(
             default=50, ge=0, le=10000,
-            description="PDFs with this many pages or more use Mistral OCR text instead of native PDF input. Per file, not attachment total. 0 disables Mistral and sends all PDFs natively. Dedicated gpt-6-ocr is unchanged.",
+            description="이 페이지 수 이상인 PDF는 원본 대신 Mistral OCR 텍스트로 전달합니다. 첨부 전체 합계가 아닌 파일별 기준입니다. 0이면 Mistral을 사용하지 않고 모든 PDF 원본을 전달합니다. 전용 gpt-6-ocr 동작은 바뀌지 않습니다.",
         )
         PDF_MISTRAL_API_KEY: str = Field(
             default="", repr=False,
-            description="Mistral API key for long PDF OCR. If empty, use server MISTRAL_API_KEY or MISTRAL_OCR_API_KEY environment variable. Not the OpenAI key; set in admin Valves, never in chat.",
+            description="긴 PDF의 OCR에 사용할 Mistral API 키입니다. 비워 두면 서버의 MISTRAL_API_KEY 또는 MISTRAL_OCR_API_KEY 환경변수를 사용합니다. OpenAI 키와 다릅니다. 대화에 입력하지 말고 관리자 Valves에서 설정하세요.",
         )
         PDF_MISTRAL_BASE_URL: str = Field(
-            default="https://api.mistral.ai/v1", description="Mistral OCR API base URL.",
+            default="https://api.mistral.ai/v1", description="Mistral OCR API의 기본 URL입니다.",
         )
         PDF_MISTRAL_MODEL: str = Field(
-            default="mistral-ocr-latest", description="Mistral OCR model ID. Pin a version here if needed.",
+            default="mistral-ocr-latest", description="Mistral OCR 모델 ID입니다. 필요하면 여기에서 특정 버전으로 고정할 수 있습니다.",
         )
         PDF_NATIVE_MAX_MB: int = Field(
             default=50, ge=1, le=50,
-            description="Maximum total original PDF bytes per request (decimal MB). Oversized documents fail explicitly; never fall back to OCR/RAG.",
+            description="요청당 PDF 원본 크기 합계의 상한입니다(십진 MB 기준). 초과하면 오류를 표시하며 OCR/RAG로 자동 전환하지 않습니다.",
         )
         ENABLE_GPT6_SOL_LUNA_MODELS: bool = Field(
             default=True,
-            description="Expose GPT-6 Sol/Luna and their fixed-model auto aliases even with a saved MODEL_ID list. Visibility only; gpt-6-auto routing remains available.",
+            description="저장된 MODEL_ID 목록이 있어도 GPT-6 Sol/Luna와 모델 고정 자동 추론 별칭을 표시합니다. 표시 여부만 제어하며, gpt-6-auto 라우팅은 계속 사용할 수 있습니다.",
         )
         GPT6_AUTO_POLICY: Literal["sol_first"] = Field(
             default="sol_first",
-            description="GPT-6.1 Sol is the default; Terra handles simple and bounded token-heavy implementation tasks; Astra requires exceptional work. Ordinary effort is capped at medium, difficult effort at high. Old policies migrate automatically.",
+            description="GPT-6.1 Sol을 기본으로 사용합니다. 단순 작업과 범위가 명확하고 토큰 사용량이 많은 구현 작업은 Terra, 예외적으로 어려운 작업은 Astra가 담당합니다. 추론 강도는 일반 작업 최대 medium, 어려운 작업 최대 high입니다. 이전 정책 설정은 자동으로 이전됩니다.",
         )
         @model_validator(mode="before")
         @classmethod
@@ -1357,267 +1343,246 @@ class Pipe:
 
         GPT6_AUTO_ROUTER_MODEL: str = Field(
             default="gpt-6-luna",
-            description="Low-cost router for GPT-6 smart/fixed auto aliases. Saved gpt-5.6-luna defaults migrate to gpt-6-luna; custom routers remain unchanged.",
+            description="GPT-6의 모델·추론 강도 자동 선택과 고정 모델의 추론 강도 선택에 사용할 저비용 분류 모델입니다. 저장된 기본값 gpt-5.6-luna는 gpt-6-luna로 이전하며, 사용자 지정 라우터는 유지합니다.",
         )
         GPT6_AUTO_ROUTING_PROFILE: Literal["economy", "balanced", "professional", "quality"] = Field(
             default="professional",
-            description="Deprecated saved setting; GPT6_AUTO_POLICY=sol_first determines GPT-6 routing.",
+            description="이전 설정과의 호환성을 위해 남겨 둔 항목입니다. 현재 GPT-6 라우팅은 GPT6_AUTO_POLICY=sol_first로 결정됩니다.",
         )
         GPT6_AUTO_TERRA_BIAS: Literal["off", "moderate", "strong"] = Field(
             default="off",
-            description="Deprecated saved setting; Sol-first policy controls Terra routing.",
+            description="이전 설정과의 호환성을 위해 남겨 둔 항목입니다. 현재 Terra 라우팅은 Sol 우선 정책으로 제어합니다.",
         )
         GPT6_AUTO_MAX_TARGET: Literal["terra", "sol", "astra"] = Field(
             default="astra",
-            description="Highest GPT-6 auto target. sol means GPT-6.1 Sol and prevents Astra use; saved luna ceilings migrate to terra.",
+            description="GPT-6 자동 라우팅에서 선택할 수 있는 최대 모델 등급입니다. sol은 GPT-6.1 Sol을 뜻하며 Astra 사용을 막습니다. 저장된 luna 상한은 terra로 이전됩니다.",
         )
         GPT6_AUTO_FALLBACK_TARGET: Literal["terra", "sol"] = Field(
             default="sol",
-            description="Router failure target (sol = GPT-6.1 Sol), subject to model ceiling. Astra is never used merely because routing failed.",
+            description="라우터 실패 시 사용할 모델입니다(sol = GPT-6.1 Sol). 모델 등급 상한이 적용됩니다. 라우팅 실패만을 이유로 Astra를 사용하지 않습니다.",
         )
         GPT6_AUTO_FALLBACK_EFFORT: Literal["none", "low", "medium", "high", "xhigh", "max"] = Field(
             default="medium",
-            description="Router failure effort; ordinary-task ceiling (medium) still applies.",
+            description="라우터 실패 시 사용할 추론 강도입니다. 일반 작업의 상한인 medium이 계속 적용됩니다.",
         )
         ASTRA_AUTO_REASONING_MAX_EFFORT: Literal["low", "medium", "high", "xhigh", "max"] = Field(
             default="high",
-            description="Maximum effort selected automatically when the final target is GPT-6 Astra.",
+            description="최종 모델이 GPT-6 Astra일 때 자동 선택할 수 있는 최대 추론 강도입니다.",
         )
         ASTRA_PROMOTION: Literal["conservative", "balanced", "aggressive", "disabled"] = Field(
             default="conservative",
             description=(
-                "How readily gpt-6-auto may promote to Astra. conservative reserves Astra for exceptional hard "
-                "end-to-end work; disabled keeps gpt-6-auto at Sol or below even if GPT6_AUTO_MAX_TARGET=astra."
+                "gpt-6-auto에서 Astra로 승격하는 적극성입니다. conservative는 예외적으로 어려운 전체 작업에만 Astra를 사용합니다. disabled는 GPT6_AUTO_MAX_TARGET=astra여도 Sol 이하로 제한합니다."
             ),
         )
         # Smart model + effort routing (generic gpt-5.6-auto)
         AUTO_MODEL_ROUTER_MODEL: str = Field(
             default="gpt-5.6-luna",
             description=(
-                "Router used by the generic gpt-5.6-auto to choose Luna/Terra/Sol and reasoning effort. "
-                "It must support vision/file inputs; gpt-5.6-luna is recommended for low routing cost."
+                "gpt-5.6-auto에서 Luna/Terra/Sol과 추론 강도를 선택하는 라우터입니다. 이미지·파일 입력을 지원해야 하며, 낮은 분류 비용을 위해 gpt-5.6-luna를 권장합니다."
             ),
         )
         AUTO_MODEL_ROUTING_PROFILE: Literal["economy", "balanced", "quality"] = Field(
             default="balanced",
             description=(
-                "Bias for gpt-5.6-auto. economy strongly favors Luna; balanced favors Luna for routine "
-                "work and Terra for precision/synthesis; quality promotes more work to Terra/Sol."
+                "gpt-5.6-auto의 선택 성향입니다. economy는 Luna를 강하게 우선합니다. balanced는 일반 작업에 Luna, 정확성·종합 분석에 Terra를 우선합니다. quality는 더 많은 작업을 Terra/Sol에 배정합니다."
             ),
         )
         AUTO_MODEL_MAX_TARGET: Literal["luna", "terra", "sol"] = Field(
             default="sol",
-            description="Highest base model gpt-5.6-auto may select. Use terra to prevent automatic Sol usage.",
+            description="gpt-5.6-auto가 선택할 수 있는 최대 기본 모델 등급입니다. terra로 설정하면 Sol을 자동으로 사용하지 않습니다.",
         )
         AUTO_MODEL_FALLBACK_TARGET: Literal["luna", "terra", "sol"] = Field(
             default="terra",
-            description="Base model used if the smart model router fails or returns invalid JSON.",
+            description="모델 선택 라우터가 실패하거나 잘못된 JSON을 반환할 때 사용할 기본 모델입니다.",
         )
         AUTO_MODEL_FALLBACK_EFFORT: Literal["none", "low", "medium", "high"] = Field(
             default="medium",
-            description="Reasoning effort used with AUTO_MODEL_FALLBACK_TARGET when smart routing fails.",
+            description="모델 자동 라우팅 실패 시 AUTO_MODEL_FALLBACK_TARGET 모델에 적용할 추론 강도입니다.",
         )
         # Auto reasoning routing (fixed-base GPT-5.6 *-auto pseudo-models)
         AUTO_REASONING_ROUTER_MODEL: str = Field(
             default="gpt-5.6-luna",
             description=(
-                "Fast vision-capable model used to classify query/attachment complexity for the "
-                "fixed-base gpt-5.6-sol-auto / terra-auto / luna-auto aliases. The latest user's "
-                "image/file blocks are sent to this router so screenshots/photos/documents affect "
-                "the effort decision based on their actual content."
+                "gpt-5.6-sol-auto / terra-auto / luna-auto처럼 기본 모델이 고정된 별칭에서 질문·첨부의 난도를 분류할 빠른 이미지 지원 모델입니다. 최신 사용자 이미지·파일을 전달하므로 스크린샷·사진·문서의 실제 내용을 바탕으로 추론 강도를 결정합니다."
             ),
         )
         AUTO_REASONING_MAX_EFFORT: Literal["none", "low", "medium", "high", "xhigh", "max"] = Field(
             default="high",
             description=(
-                "Maximum effort the automatic router may select. GPT-5.6 supports "
-                "none|low|medium|high|xhigh|max. 'high' is the default cost/quality ceiling; "
-                "choose xhigh/max only when you intentionally accept higher latency/cost."
+                "라우터가 자동 선택할 수 있는 최대 추론 강도입니다. GPT-5.6은 none|low|medium|high|xhigh|max를 지원합니다. 기본값 high는 비용과 품질을 고려한 상한입니다. 더 긴 대기 시간과 높은 비용을 감수할 때만 xhigh/max를 선택하세요."
             ),
         )
         AUTO_REASONING_FALLBACK_EFFORT: Literal["none", "low", "medium", "high"] = Field(
             default="low",
-            description="Effort used if the routing request fails or its structured output cannot be parsed.",
+            description="라우팅 요청에 실패하거나 구조화된 출력 결과를 해석할 수 없을 때 사용할 추론 강도입니다.",
         )
         AUTO_REASONING_TOOL_FLOOR: Literal["none", "low"] = Field(
             default="none",
             description=(
-                "Optional minimum effort when tools are attached. Current GPT-5.6 accepts effort=none; "
-                "set this to low only for a proxy/provider that has tool compatibility issues at none."
+                "도구가 연결된 경우 적용할 선택적 최소 추론 강도입니다. 현재 GPT-5.6은 effort=none을 지원합니다. none에서 도구 호환성 문제가 발생하는 프록시·제공자를 사용할 때만 low로 설정하세요."
             ),
         )
         # ── Native HWPX reader (v1.5.4) ─────────────────────────────────
         HWPX_NATIVE_PARSER: bool = Field(
             default=True,
             description=(
-                "Parse uploaded .hwpx files locally as ZIP/XML and inject their paragraphs/tables "
-                "directly into the latest user turn. This bypasses Open WebUI RAG text for HWPX."
+                "업로드한 .hwpx 파일을 로컬에서 ZIP/XML로 해석하고 문단·표를 최신 사용자 메시지에 직접 넣습니다. HWPX에 대한 Open WebUI RAG 텍스트를 우회합니다."
             ),
         )
         HWPX_USE_ORIGINAL_USER_PROMPT: bool = Field(
             default=True,
-            description="Use __metadata__['user_prompt'] before RAG/citation wrapping when HWPX is attached.",
+            description="HWPX가 첨부되면 RAG·인용문이 추가되기 전의 __metadata__['user_prompt']를 사용합니다.",
         )
         HWPX_INCLUDE_EMBEDDED_IMAGES: bool = Field(
             default=True,
-            description="Extract embedded HWPX images and pass selected images as input_image blocks.",
+            description="HWPX 내부 이미지를 추출하고 선택된 이미지를 input_image 블록으로 전달합니다.",
         )
         HWPX_IMAGE_POLICY: Literal["adaptive", "all", "bounded", "none"] = Field(
             default="adaptive",
             description=(
-                "Embedded-image policy. adaptive = send all small sets, then de-duplicate/filter/prioritize "
-                "larger sets; all = keep package order up to the hard safety cap; bounded = legacy fixed-count "
-                "mode using HWPX_MAX_EMBEDDED_IMAGES; none = never send HWPX images."
+                "내부 이미지 전달 정책입니다. adaptive: 이미지가 적으면 모두 전달하고, 많으면 중복 제거·필터링·우선순위 선택을 적용합니다. all: 절대 상한까지 파일 내부 순서대로 전달합니다. bounded: HWPX_MAX_EMBEDDED_IMAGES를 사용하는 기존 고정 개수 방식입니다. none: HWPX 이미지를 전달하지 않습니다."
             ),
         )
         HWPX_IMAGE_SOFT_LIMIT: int = Field(
             default=12, ge=1, le=50,
             description=(
-                "Adaptive soft limit. When the usable embedded-image count is at or below this value, all "
-                "images are normally passed through without decorative-image filtering."
+                "adaptive 모드의 기본 이미지 수 기준입니다. 사용 가능한 내부 이미지 수가 이 값 이하면 일반적으로 장식 이미지 필터링 없이 모두 전달합니다."
             ),
         )
         HWPX_IMAGE_HARD_LIMIT: int = Field(
             default=24, ge=1, le=100,
-            description="Absolute maximum number of HWPX embedded images sent in adaptive/all mode.",
+            description="adaptive/all 모드에서 전달할 HWPX 내부 이미지 수의 절대 상한입니다.",
         )
         HWPX_IMAGE_MODERATE_THRESHOLD: int = Field(
             default=30, ge=2, le=200,
             description=(
-                "Image-count threshold separating medium and very image-heavy HWPX documents. Above this "
-                "threshold adaptive mode selects only the highest-value images up to HWPX_IMAGE_HARD_LIMIT."
+                "이미지가 보통 수준인 HWPX와 매우 많은 HWPX를 구분하는 개수 기준입니다. 이 값을 넘으면 adaptive 모드에서 HWPX_IMAGE_HARD_LIMIT까지 중요한 이미지만 선택합니다."
             ),
         )
         HWPX_IMAGE_DETAIL: Literal["auto", "low", "high"] = Field(
             default="auto",
             description=(
-                "Vision detail for selected HWPX images. auto uses high only for small/visual-analysis sets "
-                "and low for larger sets to reduce image-token cost."
+                "선택한 HWPX 이미지의 분석 상세도입니다. auto는 이미지가 적거나 시각 분석이 필요한 경우에만 high를 사용하고, 이미지가 많으면 low로 이미지 토큰 비용을 줄입니다."
             ),
         )
         HWPX_IMAGE_HIGH_DETAIL_MAX: int = Field(
             default=6, ge=1, le=30,
-            description="Maximum selected-image count at which HWPX_IMAGE_DETAIL=auto may choose high detail.",
+            description="HWPX_IMAGE_DETAIL=auto에서 high 상세도를 선택할 수 있는 최대 이미지 수입니다.",
         )
         HWPX_IMAGE_MIN_WIDTH: int = Field(
             default=80, ge=1, le=2048,
-            description="Adaptive decoration heuristic: images smaller than this width may be deprioritized.",
+            description="adaptive 모드의 장식 이미지 판별 기준입니다. 너비가 이 값보다 작은 이미지의 우선순위를 낮출 수 있습니다.",
         )
         HWPX_IMAGE_MIN_HEIGHT: int = Field(
             default=80, ge=1, le=2048,
-            description="Adaptive decoration heuristic: images smaller than this height may be deprioritized.",
+            description="adaptive 모드의 장식 이미지 판별 기준입니다. 높이가 이 값보다 작은 이미지의 우선순위를 낮출 수 있습니다.",
         )
         HWPX_IMAGE_MIN_AREA: int = Field(
             default=12000, ge=1, le=10000000,
-            description="Adaptive decoration heuristic: very small pixel-area images may be deprioritized.",
+            description="adaptive 모드의 장식 이미지 판별 기준입니다. 픽셀 면적이 매우 작은 이미지의 우선순위를 낮출 수 있습니다.",
         )
         HWPX_DEDUPLICATE_IMAGES: bool = Field(
             default=True,
-            description="Drop byte-identical embedded images (common repeated logos/icons) before vision input.",
+            description="이미지 입력 전에 바이트가 완전히 같은 내부 이미지를 제거합니다. 반복되는 로고·아이콘 등에 적용됩니다.",
         )
         HWPX_AUTO_MODEL_ESCALATION: bool = Field(
             default=True,
             description=(
-                "When using gpt-5.6-auto, prevent image-heavy visual-analysis HWPX or image-dominant HWPX "
-                "documents from routing below Terra. AUTO_MODEL_MAX_TARGET remains the final ceiling."
+                "gpt-5.6-auto 사용 시 이미지가 많고 시각 분석이 필요한 HWPX 또는 이미지 위주의 HWPX가 Terra 아래로 라우팅되지 않도록 합니다. 최종 상한은 AUTO_MODEL_MAX_TARGET입니다."
             ),
         )
         HWPX_MAX_EMBEDDED_IMAGES: int = Field(
             default=12, ge=0, le=100,
             description=(
-                "Legacy fixed image cap used only when HWPX_IMAGE_POLICY='bounded'. Kept for backward-compatible "
-                "admin configurations; adaptive mode uses the soft/hard limits instead."
+                "HWPX_IMAGE_POLICY=bounded에서만 사용하는 기존 고정 이미지 개수 상한입니다. 이전 관리자 설정과의 호환성을 위해 유지하며, adaptive 모드는 별도의 기본 기준과 절대 상한을 사용합니다."
             ),
         )
         HWPX_MAX_TEXT_CHARS: int = Field(
             default=500000, ge=10000, le=4000000,
-            description="Safety cap for locally extracted HWPX text/table context before sending it to the model.",
+            description="로컬에서 추출한 HWPX 텍스트·표를 모델에 전달하기 전 적용할 최대 문자 수입니다.",
         )
 
         # ── Dedicated OCR model behavior (v1.5.1) ──────────────────────────
         OCR_NATIVE_FILE_PASSTHROUGH: bool = Field(
             default=True,
             description=(
-                "For gpt-6-ocr, read Open WebUI's reserved __files__ entries and send the original "
-                "file to OpenAI instead of relying on injected RAG text. Disable only for debugging."
+                "gpt-6-ocr에서 Open WebUI의 예약 항목 __files__를 읽어 RAG 텍스트 대신 파일 원본을 OpenAI에 전달합니다. 디버깅할 때만 끄세요."
             ),
         )
         OCR_USE_ORIGINAL_USER_PROMPT: bool = Field(
             default=True,
             description=(
-                "Use __metadata__['user_prompt'] captured before source/RAG citation wrapping. This prevents "
-                "Open WebUI retrieval text from contaminating the native-file OCR request."
+                "출처·RAG 인용문이 추가되기 전에 보관한 __metadata__['user_prompt']를 사용합니다. Open WebUI 검색 결과가 원본 파일 OCR 요청에 섞이지 않도록 합니다."
             ),
         )
         OCR_UPLOAD_DIR: str = Field(
             default=(os.getenv("OPEN_WEBUI_UPLOAD_DIR") or "/app/backend/data/uploads"),
-            description="Open WebUI local upload directory used to resolve __files__ binaries.",
+            description="__files__의 파일 원본을 찾는 데 사용할 Open WebUI 로컬 업로드 디렉터리입니다.",
         )
         OCR_PDF_BATCH_PAGES: int = Field(
             default=10,
             ge=1,
             le=50,
             description=(
-                "Pages per PDF batch. Each range is sent independently so long scans cannot lose later pages "
-                "to output limits. 10 is a conservative default for mixed-density school/admin documents."
+                "PDF를 한 번에 처리할 페이지 수입니다. 각 범위를 따로 보내므로 출력 한도로 긴 스캔의 뒷부분이 누락되는 것을 방지합니다. 기본값 10은 내용 밀도가 다양한 학교·행정 문서를 고려한 보수적인 값입니다."
             ),
         )
         OCR_REASONING_EFFORT: Literal["none", "low", "medium"] = Field(
             default="low",
-            description="Reasoning effort for the Luna OCR first pass. OCR is usually vision/extraction rather than deep reasoning.",
+            description="Luna의 첫 OCR 처리에 사용할 추론 강도입니다. OCR은 보통 깊은 추론보다 이미지 인식·내용 추출이 중심입니다.",
         )
         OCR_SOL_FALLBACK: bool = Field(
             default=True,
             description=(
-                "Retry a batch with GPT-6 Sol when Luna returns an incomplete response or fails Markdown/integrity validation."
+                "Luna 응답이 불완전하거나 Markdown·내용 무결성 검증에 실패하면 해당 묶음을 GPT-6 Sol로 재시도합니다."
             ),
         )
         OCR_FALLBACK_MODEL: Literal["gpt-6-sol"] = Field(
             default="gpt-6-sol",
-            description="GPT-6 Sol retries OCR batches that fail Luna output validation.",
+            description="Luna 출력 검증에 실패한 OCR 묶음을 재시도할 GPT-6 Sol 모델입니다.",
         )
         OCR_FALLBACK_EFFORT: Literal["low", "medium", "high"] = Field(
             default="medium",
-            description="Reasoning effort used for the OCR fallback retry.",
+            description="OCR 실패 후 대체 모델로 재시도할 때 사용할 추론 강도입니다.",
         )
         OCR_VALIDATE_OUTPUT: bool = Field(
             default=True,
             description=(
-                "Validate that OCR output contains a structurally consistent Markdown table and no obvious truncation/omission markers."
+                "OCR 출력에 구조가 일관된 Markdown 표가 포함되어 있고, 명백한 잘림·누락 표시가 없는지 검증합니다."
             ),
         )
         OCR_MAX_OUTPUT_TOKENS: int = Field(
             default=128000,
             ge=1024,
             le=128000,
-            description="Maximum output tokens requested for each OCR batch. Applied independently to each OCR batch.",
+            description="OCR 묶음마다 요청할 최대 출력 토큰 수입니다. 각 묶음에 독립적으로 적용됩니다.",
         )
         OCR_OPENAI_FILE_EXPIRES_SECONDS: int = Field(
             default=3600,
             ge=3600,
             le=2592000,
-            description="Expiry for temporary OpenAI user_data file uploads (1 hour to 30 days).",
+            description="OpenAI에 user_data 용도로 임시 업로드한 파일의 만료 시간입니다(1시간~30일).",
         )
         OCR_DELETE_OPENAI_FILES_AFTER_REQUEST: bool = Field(
             default=True,
-            description="Delete temporary OpenAI files immediately after each OCR batch; expires_after remains a safety net.",
+            description="각 OCR 묶음 처리 직후 OpenAI 임시 파일을 삭제합니다. 삭제되지 않은 경우에도 expires_after에 따라 만료됩니다.",
         )
         OCR_PRESERVE_FIRST_PREFACE: bool = Field(
             default=True,
             description=(
-                "When batching, keep only the first batch's short prose preface before the Markdown table. "
-                "Set False for strict table-only downstream pipelines."
+                "묶음 처리 시 첫 번째 묶음의 Markdown 표 앞에 있는 짧은 설명만 보존합니다. 이후 처리에서 표만 필요하면 False로 설정하세요."
             ),
         )
         OCR_REQUIRE_TABLE: bool = Field(
             default=True,
-            description="Require a Markdown table. Turn off only if you intentionally reuse gpt-6-ocr for plain-text extraction.",
+            description="Markdown 표 출력을 필수로 합니다. gpt-6-ocr를 일반 텍스트 추출에 의도적으로 사용할 때만 끄세요.",
         )
         OCR_MAX_PREFACE_CHARS: int = Field(
             default=500,
             ge=0,
             le=4000,
-            description="Maximum non-table prefix accepted/preserved from the first batch.",
+            description="첫 번째 묶음에서 허용하고 보존할 표 앞 설명의 최대 문자 수입니다.",
         )
         # ── Dedicated image-model behavior (v1.2.6+) ─────────────────────
         # When the user picks 'gpt-image-2' (or another image_generation
@@ -1631,119 +1596,98 @@ class Pipe:
         # via this Valves panel, and individual users can override via
         # their UserValves panel (the 밸브 button in the chat UI).
         ENABLE_CONVERSATION_IMAGES: bool = Field(
-            default=True, description="Let text models call the configured OpenAI image API during conversation. No separate WebUI image engine is needed.")
+            default=True, description="대화 중 텍스트 모델이 설정된 OpenAI 이미지 API를 호출하도록 합니다. 별도 WebUI 이미지 엔진은 필요하지 않습니다.")
         CONVERSATION_IMAGE_MODEL: str = Field(
-            default="gpt-image-2", description="OpenAI Images API model used by conversational image tools. No automatic model substitution.")
+            default="gpt-image-2", description="대화형 이미지 도구가 사용할 OpenAI Images API 모델입니다. 다른 모델로 자동 대체하지 않습니다.")
         CONVERSATION_IMAGE_MAX_CALLS: int = Field(
-            default=2, ge=1, le=4, description="Maximum image API attempts per user message; failed/timeout calls are not automatically retried.")
+            default=2, ge=1, le=4, description="사용자 메시지 하나당 이미지 API 호출 시도의 최대 횟수입니다. 실패하거나 시간 초과된 호출은 자동 재시도하지 않습니다.")
         ENABLE_SUNBURST_IMAGE_MODEL: bool = Field(
             default=True,
-            description="Show standalone gpt-image-2.5-sunburst even with an existing MODEL_ID list. Independent of Flare and text-model routing.",
+            description="기존 MODEL_ID 목록이 있어도 독립 모델 gpt-image-2.5-sunburst를 표시합니다. Flare 및 텍스트 모델 라우팅과 독립적으로 동작합니다.",
         )
         ENABLE_FLARE_IMAGE_MODEL: bool = Field(
             default=True,
-            description="Show standalone gpt-image-2.5-flare even with an existing MODEL_ID list. Does not enable image generation in text models.",
+            description="기존 MODEL_ID 목록이 있어도 독립 모델 gpt-image-2.5-flare를 표시합니다. 이 설정으로 텍스트 모델의 이미지 생성이 활성화되지는 않습니다.",
         )
         IMAGE_QUALITY: Literal["auto", "low", "medium", "high", "xhigh", "max"] = Field(
             default="low",
             description=(
-                "Default image quality. Flare and Sunburst support xhigh/max; older image models cap these at high. "
-                "low = fastest and cheapest (good for drafts), high = best fidelity, "
-                "auto = let the model pick. Per-user override available in 밸브."
+                "기본 이미지 품질입니다. Flare와 Sunburst는 xhigh/max를 지원하며, 이전 이미지 모델에서는 high로 제한됩니다. low는 가장 빠르고 저렴해 초안에 적합하고, high는 세부 표현을 중시하며, auto는 모델이 선택합니다. 사용자는 밸브에서 개별 설정할 수 있습니다."
             ),
         )
         IMAGE_SIZE: Literal["auto", "1024x1024", "1024x1536", "1536x1024"] = Field(
             default="1024x1024",
             description=(
-                "Default image size for gpt-image-2. "
-                "1024x1024 = square, 1024x1536 = portrait (2:3), 1536x1024 = landscape (3:2), "
-                "auto = let the model pick based on the prompt. "
-                "gpt-image-2 supports thousands of resolutions; these are the canonical "
-                "presets used by OpenAI examples. Per-user override available in 밸브."
+                "gpt-image-2의 기본 이미지 크기입니다. 1024x1024는 정사각형, 1024x1536은 세로형(2:3), 1536x1024는 가로형(3:2), auto는 프롬프트에 따라 모델이 선택합니다. gpt-image-2는 수천 가지 해상도를 지원하며, 이 목록은 OpenAI 예제에서 사용하는 대표 설정입니다. 사용자는 밸브에서 개별 설정할 수 있습니다."
             ),
         )
         # Tool execution behavior
         PERSIST_TOOL_RESULTS: bool = Field(
             default=True,
-            description="Persist tool call results across conversation turns. When disabled, tool results are not stored in the chat history.",
+            description="도구 호출 결과를 이후 대화에서도 사용할 수 있도록 저장합니다. 끄면 도구 결과가 대화 기록에 저장되지 않습니다.",
         )
         PARALLEL_TOOL_CALLS: bool = Field(
             default=True,
-            description="Whether tool calls can be parallelized. Defaults to True if not set. Read more: https://platform.openai.com/docs/api-reference/responses/create#responses-create-parallel_tool_calls",
+            description="도구 호출을 병렬로 실행할 수 있는지 설정합니다. 지정하지 않으면 기본값은 True입니다. 문서: https://platform.openai.com/docs/api-reference/responses/create#responses-create-parallel_tool_calls",
         )
         ENABLE_STRICT_TOOL_CALLING: bool = Field(
             default=True,
             description=(
-                "When True, converts Open WebUI registry tools to strict JSON Schema for OpenAI tools, "
-                "enforcing explicit types, required fields, and disallowing additionalProperties."
+                "True이면 Open WebUI에 등록된 도구를 OpenAI용 엄격한 JSON Schema로 변환합니다. 명시적인 자료형과 필수 필드를 적용하고 추가 속성(additionalProperties)을 허용하지 않습니다."
             ),
         )
         MAX_TOOL_CALLS: Optional[int] = Field(
             default=None,
             description=(
-                "Maximum number of individual tool or function calls the model can make "
-                "within a single response. Applies to the total number of calls across "
-                "all built-in tools. Further tool-call attempts beyond this limit will be ignored."
+                "하나의 응답에서 모델이 실행할 수 있는 개별 도구·함수 호출 수의 상한입니다. 모든 내장 도구의 호출 합계에 적용됩니다. 상한을 넘는 추가 호출 시도는 무시됩니다."
             )
         )
         MAX_FUNCTION_CALL_LOOPS: int = Field(
             default=64,
             description=(
-                "Maximum number of full execution cycles (loops) allowed per request. "
-                "Each loop involves the model generating one or more function/tool calls, "
-                "executing all requested functions, and feeding the results back into the model. "
-                "Looping stops when this limit is reached or when the model no longer requests "
-                "additional tool or function calls."
+                "요청당 허용할 전체 실행 반복 횟수입니다. 한 번의 반복은 모델의 도구·함수 호출 생성, 요청된 함수 전체 실행, 결과를 모델에 전달하는 과정입니다. 상한에 도달하거나 모델이 더 이상 도구·함수 호출을 요청하지 않으면 중단합니다."
             )
         )
         # Web search
         ENABLE_WEB_SEARCH_TOOL: bool = Field(
             default=True,
             description=(
-                "Attach OpenAI's built-in web_search tool automatically when the selected model supports it. "
-                "The model still decides whether a particular answer needs a search. GPT-6 and GPT-5.6 "
-                "text models carry web_search_default, so their auto aliases inherit the same behavior. "
-                "Set False only to disable default web search for models without web_search_default."
+                "선택한 모델이 지원하면 OpenAI 내장 web_search 도구를 자동으로 연결합니다. 실제 검색 필요 여부는 모델이 결정합니다. GPT-6 및 GPT-5.6 텍스트 모델은 web_search_default 기능이 있어 자동 별칭에도 같은 동작이 적용됩니다. False는 web_search_default가 없는 모델의 기본 웹 검색만 끕니다."
             ),
         )
         WEB_SEARCH_CONTEXT_SIZE: Literal["low", "medium", "high", None] = Field(
             default="medium",
-            description="OpenAI web search context size: low | medium | high. Used whenever web_search is attached.",
+            description="OpenAI 웹 검색 문맥의 크기입니다: low(작게), medium(보통), high(크게). web_search가 연결될 때마다 사용합니다.",
         )
         WEB_SEARCH_USER_LOCATION: Optional[str] = Field(
             default=None,
-            description='User location for web search context. Leave blank to disable. Must be in valid JSON format according to OpenAI spec.  E.g., {"type": "approximate","country": "US","city": "San Francisco","region": "CA"}.',
+            description="웹 검색 문맥에 사용할 사용자 위치입니다. 비워 두면 사용하지 않습니다. OpenAI 규격에 맞는 유효한 JSON으로 입력하세요. 예: {\"type\": \"approximate\",\"country\": \"US\",\"city\": \"San Francisco\",\"region\": \"CA\"}.",
         )
         # Integrations
         REMOTE_MCP_SERVERS_JSON: Optional[str] = Field(
             default=None,
             description=(
-                "[EXPERIMENTAL] A JSON-encoded list (or single JSON object) defining one or more "
-                "remote MCP servers to be automatically attached to each request. This can be useful "
-                "for globally enabling tools across all chats.\n\n"
-                "Note: The Responses API currently caches MCP server definitions at the start of each chat. "
-                "This means the first message in a new thread may be slower. A more efficient implementation is planned."
-                "Each item must follow the MCP tool schema supported by the OpenAI Responses API, for example:\n"
-                '[{"server_label":"deepwiki","server_url":"https://mcp.deepwiki.com/mcp","require_approval":"never","allowed_tools": ["ask_question"]}]'
+                "[실험적 기능] 요청마다 자동으로 연결할 원격 MCP 서버를 정의하는 JSON 목록 또는 단일 JSON 객체입니다. 모든 대화에서 공통 도구를 사용하도록 설정할 때 유용합니다.\n"
+                "\n"
+                "참고: Responses API는 현재 대화 시작 시 MCP 서버 정의를 캐시하므로 새 대화의 첫 메시지가 느릴 수 있습니다. 더 효율적인 구현이 예정되어 있습니다. 각 항목은 OpenAI Responses API가 지원하는 MCP 도구 스키마를 따라야 합니다. 예:\n"
+                "[{\"server_label\":\"deepwiki\",\"server_url\":\"https://mcp.deepwiki.com/mcp\",\"require_approval\":\"never\",\"allowed_tools\": [\"ask_question\"]}]"
             ),
         )
         TRUNCATION: Literal["auto", "disabled"] = Field(
             default="auto",
-            description="OpenAI truncation strategy for model responses. 'auto' drops middle context items if the conversation exceeds the context window; 'disabled' returns a 400 error instead.",
+            description="OpenAI 응답의 문맥 초과 처리 방식입니다. auto는 대화가 문맥 한도를 넘으면 중간 항목을 제거합니다. disabled는 대신 400 오류를 반환합니다.",
         )
         # Privacy & caching
         PROMPT_CACHE_KEY: Literal["id", "email"] = Field(
             default="id",
             description=(
-                "Controls which user identifier is sent in the 'user' parameter to OpenAI. "
-                "Passing a unique identifier enables OpenAI response caching (improves speed and reduces cost). "
-                "Choose 'id' to use the OpenWebUI user ID (default; privacy-friendly), or 'email' to use the user's email address."
+                "OpenAI에 user 매개변수로 전달할 사용자 식별자를 선택합니다. 고유 식별자는 응답 캐싱을 통한 속도 개선과 비용 절감에 사용됩니다. id는 Open WebUI 사용자 ID를 사용하며 기본값이고 개인정보 노출을 줄입니다. email은 사용자 이메일 주소를 사용합니다."
             ),
         )
         # Logging
         LOG_LEVEL: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = Field(
             default=os.getenv("GLOBAL_LOG_LEVEL", "INFO").upper(),
-            description="Select logging level.  Recommend INFO or WARNING for production use. DEBUG is useful for development and debugging.",
+            description="로그 기록 수준을 선택합니다. 운영 환경에서는 INFO 또는 WARNING을 권장합니다. DEBUG는 개발과 오류 분석에 유용합니다.",
         )
     class UserValves(BaseModel):
         """Per-user valve overrides (shown in the chat-UI 밸브 button).
