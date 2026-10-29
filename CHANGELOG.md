@@ -1,5 +1,13 @@
 # 업데이트 내역
 
+## 2026-10-29 — OpenAI Responses v1.8.6
+
+- `gpt-6-auto`의 Luna 응답 단계를 GPT-6.1 Terra로 교체했습니다. GPT-6.1 Sol 기본·불확실 요청·라우터 실패 fallback과 예외 난도의 Astra 분기는 유지합니다. 분류용 GPT-6 Luna, 직접 선택 Luna 및 전용 OCR 경로는 변경하지 않았습니다.
+- `token_heavy` 분류를 추가해 명세가 명확한 코드 구현·반복 수정·테스트 생성·대량 변환은 Terra를 우선합니다. 어려운 추론·디버깅·설계·보안, 생기부 등 근거 중심 작성, 이미지 문제 풀이/불확실성 및 HWPX 품질 하한은 Sol을 유지합니다. 길이나 코딩 키워드만으로 비용 경로를 강제하지 않습니다.
+- 저장된 `GPT6_AUTO_MAX_TARGET`/`GPT6_AUTO_FALLBACK_TARGET`의 `luna`를 `terra`로 이전합니다. 최대 후보는 terra/sol/astra이며 Sol/Terra만 사용하려면 상한을 sol로 설정합니다. Terra의 도구 기능과 none~max 추론 강도를 등록하고 HTTP 전송 파라미터 정규화에 포함했습니다.
+- 검증: 번들 Python에서 전체 오프라인 217개 중 204개 통과·13개 생략(Google SDK 11개, Node 브라우저 계약 2개). 신규 6개 테스트에서 token_heavy 분기·품질 하한, 예전 Luna 응답 거부·분류기 유지, 설정 이전, Terra HTTP 정규화와 스트리밍/비스트리밍 도구 구성을 확인했습니다. 기존 소스 보존 테스트의 허용 변경 목록에 설정 이전 함수를 추가했습니다. 배포 JSON/원본·하네스 일치 및 diff 검사를 통과했습니다.
+- 한계: 기본 Python에는 Pydantic이 없어 번들 Python을 사용했습니다. 모의 라우터 응답 기반 검증이며 유료 API 호출, 실제 분류 정확도·비용 절감, 사용자 계정 Terra 접근 권한, OpenWebUI 서버 설치는 확인하지 않았습니다. 운영 서버의 기존 함수에 v1.8.6을 적용해야 합니다.
+
 ## 2026-10-26 — Open Terminal 하네스 v1.2.0 · 생기부 작성/윤문
 
 - `student-record-writing` 스킬을 catalog에 등록했습니다. im-not-ai 커밋 b37e0206d31fffd9149bf57168d4d62eb2086bee의 일부 한국어 윤문 규칙을 생기부용으로 각색하고 출처와 MIT 라이선스를 포함했습니다. 전체 원본 플러그인·metrics·변경률 게이트의 설치는 아닙니다.
