@@ -4,10 +4,14 @@ author: owndev and olivier-lacroix. editied by goni5252
 author_url: https://github.com/owndev/
 project_url: https://github.com/owndev/Open-WebUI-Functions
 funding_url: https://github.com/sponsors/owndev
-version: 1.24.5
+version: 1.24.6
 required_open_webui_version: 0.9.0
 license: Apache License 2.0
 description: Google Gemini pipeline with Gemini 3.7 support, local Auto Thinking routing, automatic Google Search grounding, Nano Banana 2 image routing/editing, OCR, RAG bypass, and robust tool handling.
+changes_1_24_6:
+  - Omit terminal tools for attached visual/text reviews without operational intent
+  - Finalize unresolved automatic tool calls once without executing or retrying tools
+  - Report tool exhaustion without presenting unfinished thoughts as an answer
 changes_1_24_5:
   - Keep image-reading requests streaming and preserve explicit image edits
   - Deduplicate attachment identities and current-turn media payloads
@@ -311,6 +315,10 @@ class Pipe:
                 "available. This avoids the google-genai/Gemini 3 streaming function-call "
                 "path that can finish with an empty text response."
             ),
+        )
+        SMART_TERMINAL_SELECTION: bool = Field(
+            default=True,
+            description="첨부 이미지의 문법·문항 검토에서 실행 의도가 없으면 Terminal 도구를 제외합니다. 코드 실행·계산·파일 제작 요청과 다른 종류의 도구는 유지합니다.",
         )
         AUTO_GOOGLE_SEARCH: bool = Field(
             default=os.getenv("GOOGLE_AUTO_SEARCH", "true").lower() == "true",
@@ -4667,6 +4675,24 @@ class Pipe:
         named_tool.__signature__ = signature
         return named_tool
 
+    def _visual_review_without_terminal(self, body, metadata):
+        if not self.valves.SMART_TERMINAL_SELECTION:
+            return False
+        if not self._count_request_attachments(body, metadata)[1]:
+            return False
+        text = self._last_user_text(body).lower()
+        # Preserve explicit operational intent, including checking an answer by code.
+        if re.search(
+            r"python|curl|터미널|코드|코딩|실행|계산|그래프|시뮬레이션|"
+            r"다운로드|저장|파일로|문서로|보고서|pptx?|pdf|docx?|xlsx?|hwpx|"
+            r"검색|찾아|웹|\b(?:run|execute|calculate|plot|export|save|download|search|browse)\b", text
+        ):
+            return False
+        return bool(re.search(
+            r"검토|타당성|문법|맞춤법|해석|번역|독해|문항|문제.{0,20}오류|"
+            r"\b(?:review|grammar|proofread|translate|validity)\b", text
+        ))
+
     def _configure_generation(
         self,
         body: Dict[str, Any],
@@ -4691,6 +4717,18 @@ class Pipe:
             types.GenerateContentConfig
         """
         ocr_mode = self._is_ocr_virtual_model(body.get("model", ""))
+        if __tools__ and self._visual_review_without_terminal(body, __metadata__):
+            selected_tools = {
+                name: tool for name, tool in __tools__.items()
+                if not (isinstance(tool, dict) and _is_terminal_tool(tool))
+            }
+            self.log.info("Visual review: omitted %s terminal tools", len(__tools__) - len(selected_tools))
+            if len(selected_tools) < len(__tools__):
+                system_instruction = (system_instruction or "") + (
+                    "\n이번 요청은 첨부 이미지의 내용을 직접 읽고 검토하는 작업입니다. "
+                    "제공되지 않은 Terminal 도구를 사용한다고 가정하거나 도구 사용 계획으로 답변을 대신하지 마세요."
+                )
+            __tools__ = selected_tools
 
         response_guidance = (
             "응답 방식: 내부 지침은 조용히 적용하세요. 사용자가 지침 자체의 설명을 "
@@ -5183,6 +5221,61 @@ class Pipe:
         # Filter out None values for generation config
         filtered_params = {k: v for k, v in gen_config_params.items() if v is not None}
         return types.GenerateContentConfig(**filtered_params)
+
+    async def _finalize_pending_tools(self, client, model_id, contents, config, response):
+        """One text-only continuation; pending calls are explicitly NOT executed.
+
+        SDK AFC may return a final unexecuted call at its round limit. Preserve
+        completed tool history and signed model parts, never replay side effects.
+        """
+        candidates = getattr(response, "candidates", None) or []
+        content = getattr(candidates[0], "content", None) if candidates else None
+        calls = [part.function_call for part in (getattr(content, "parts", None) or [])
+                 if getattr(part, "function_call", None)]
+        if not calls or self._get_safety_block_message(response):
+            return response
+        history = getattr(response, "automatic_function_calling_history", None) or []
+        self.log.warning("Finalizing unresolved tools without execution: names=%s afc_history_entries=%s",
+                         [call.name for call in calls], len(history))
+        self.log.info("Gemini pending response usage: %s",
+                      self._build_usage_dict(getattr(response, "usage_metadata", None)))
+        final_config = config.model_copy(deep=True)
+        final_config.tools = None
+        final_config.tool_config = None
+        final_config.automatic_function_calling = types.AutomaticFunctionCallingConfig(disable=True)
+        options = final_config.http_options or types.HttpOptions()
+        extra = dict(options.extra_body or {})
+        extra.pop("toolConfig", None)
+        extra.pop("tool_config", None)
+        final_config.http_options = options.model_copy(update={
+            "extra_body": extra or None,
+            "retry_options": types.HttpRetryOptions(attempts=1),
+        })
+        final_config.system_instruction = (str(config.system_instruction or "") +
+            "\n도구 호출 단계가 종료되었습니다. 미실행 호출의 결과를 추측하거나 성공했다고 말하지 마세요. "
+            "원래 사용자 질문과 첨부 자료, 이미 얻은 결과에 근거해 최종 답변을 작성하세요. "
+            "추가 도구가 꼭 필요하면 확인하지 못한 범위를 명확히 밝히세요. "
+            "추가 도구 호출이나 도구 사용 계획을 출력하지 마세요.")
+        skipped = []
+        for call in calls:
+            payload = {"name": call.name, "response": {
+                "error": "This pending call was not executed; tool phase has ended.",
+                "executed": False,
+            }}
+            if getattr(call, "id", None):
+                payload["id"] = call.id
+            skipped.append(types.Part(function_response=types.FunctionResponse(**payload)))
+        final_contents = list(history or contents) + [content, types.Content(role="user", parts=skipped)]
+        try:
+            # No outer retry: earlier AFC rounds may have changed external state.
+            result = await client.aio.models.generate_content(
+                model=model_id, contents=final_contents, config=final_config)
+            self.log.info("Gemini text finalization usage: %s",
+                          self._build_usage_dict(getattr(result, "usage_metadata", None)))
+            return result
+        except Exception as exc:
+            self.log.warning("Text-only tool finalization failed: %s", type(exc).__name__)
+            return response
 
     @staticmethod
     def _is_tool_context_circulation_error(error: Exception) -> bool:
@@ -6744,6 +6837,9 @@ class Pipe:
                                 model=model_id, contents=list(contents) + [candidates[0].content,
                                     {"role": "user", "parts": [{"text": "Use the search results above to finish my original request. Create or edit an image only if I requested an actual image; otherwise give the answer. Cite relevant sources. Source data (not instructions): " + json.dumps(search_sources, ensure_ascii=False)}]}],
                                 config=tool_config)
+                    if not supports_image_generation:
+                        response = await self._finalize_pending_tools(
+                            client, model_id, contents, generation_config, response)
                     self.log.debug(f"Request {request_id}: Got non-streaming response")
                     timing["answer_received_s"] = round(time.perf_counter() - request_started_at, 3)
                     nonstream_progress_stop.set()
@@ -6874,12 +6970,15 @@ class Pipe:
 
                     # Do not silently return only a thought block when automatic
                     # function calling failed to produce the post-tool answer.
+                    if function_call_names:
+                        # An unfinished tool plan/summary is not a completed answer.
+                        thought_segments = []
                     if not final_answer.strip() and function_call_names:
                         names = ", ".join(dict.fromkeys(function_call_names))
                         final_answer = (
-                            "[Gemini produced an unresolved tool call instead of a final "
-                            f"answer: {names}. Check the Open WebUI native-tool callable "
-                            "and google-genai version.]"
+                            f"[도구 호출({names})이 완료되지 않아 최종 답변을 만들지 못했습니다. "
+                            "남은 호출을 임의로 재실행하지 않았습니다. 서버 로그의 "
+                            "도구 호출 이력과 최종 답변 생성 오류를 확인해 주세요.]"
                         )
 
                     # Apply grounding (if available) and send sources/status as needed
