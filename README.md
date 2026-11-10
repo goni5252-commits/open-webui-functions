@@ -10,6 +10,7 @@ OpenWebUI 대화에서 **학교 양식으로 HWPX를 작성하고, 디자인을 
 
 | 다운로드 | 용도 |
 |---|---|
+| [EXAONE Auto v1.0.0 JSON](function-exaone_auto-v1.0.0.json) · [직접 다운로드](https://raw.githubusercontent.com/goni5252-commits/open-webui-functions/main/function-exaone_auto-v1.0.0.json) | 텍스트 전용 · 추론 강도 자동 선택 |
 | [생기부 윤문 하네스 v1.2.0](harness/open-terminal-harness-v1.2.0.zip) · [설치 안내](harness/open-terminal/INSTALL.md) | im-not-ai 규칙 일부를 각색한 생기부·세특 작성/윤문 스킬 |
 | [OpenAI Responses v1.8.7 JSON](function-openai_responses-v1.8.7.json) · [직접 다운로드](https://raw.githubusercontent.com/goni5252-commits/open-webui-functions/main/function-openai_responses-v1.8.7.json) | 이 안내에서 사용하는 함수 |
 | [엑셀 내보내기 v0.4.0 JSON](function-엑셀로_내보내기-v0.4.0.json) | 답변의 Markdown 표를 XLSX로 저장하는 Action (Open WebUI 0.11.4+) |
@@ -60,6 +61,21 @@ OpenWebUI 대화에서 **학교 양식으로 HWPX를 작성하고, 디자인을 
 근거: [GPT-6.1 Sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol), [OpenAI 파일 입력](https://developers.openai.com/api/docs/guides/file-inputs), [Mistral OCR API](https://docs.mistral.ai/api/endpoint/ocr), [OpenWebUI Mistral 설정](https://docs.openwebui.com/features/chat-conversations/rag/document-extraction/mistral-ocr/), [File Context 설정](https://docs.openwebui.com/features/chat-conversations/rag/#file-context-vs-builtin-tools).
 
 스캔 PDF 전사는 모델 목록에서 **`gpt-6-ocr`**를 선택하세요. GPT-6 Luna(`low`)로 먼저 읽고, 출력 검사에 실패한 묶음만 GPT-6 Sol(`medium`)로 재시도합니다. 원본 PDF 전송·RAG 우회·기본 10페이지 분할을 사용합니다. 기존 `gpt-5.6-ocr` 대화도 새 경로로 연결되며, 저장된 모델 목록과 이전 OCR fallback 설정은 자동 이전됩니다. 재시도를 끈 설정은 유지됩니다. 새 설정 이름은 `OCR_SOL_FALLBACK`입니다.
+
+## EXAONE 2.5 텍스트 전용 함수
+
+1. 위 **EXAONE Auto v1.0.0 JSON**을 내려받아 관리자 패널 → 함수에서 가져온 뒤 활성화합니다. 또는 [Python 원본](functions/exaone_auto.py)을 새 함수에 붙여 넣습니다. OpenWebUI 0.11.0 이상을 대상으로 작성했습니다.
+2. 관리자 Valves의 `EXAONE_API_KEY`에 키를 넣습니다. 비워 두면 OpenWebUI 서버 환경변수 `EXAONE_API_KEY`를 사용합니다. 다른 공급자 연결에 저장한 키를 자동으로 읽지는 않습니다.
+3. 모델 **EXAONE 2.5 · Auto Reasoning**을 선택합니다. 이미지·파일 업로드, 웹 검색, Tools/Builtin Tools는 끄고 텍스트로 대화합니다. 첨부 원본/OCR/파일 제작은 지원하지 않으며, 함수에 전달된 첨부·미디어·도구 메시지는 오류로 안내합니다. 이미 텍스트로 변환되어 주입된 내용은 일반 텍스트로 취급됩니다.
+4. `REASONING_EFFORT=auto`가 기본입니다. 사용자 Valves에서 `default`(관리자 설정), `auto`, `low`, `high`, `max`를 선택할 수 있습니다.
+
+자동 모드는 EXAONE `low`로 최근 최대 6개 대화 메시지(각 마지막 4,000자, system 제외)를 분류하고 선택된 강도로 **전체 텍스트 대화**의 답변을 요청합니다. 일반 채팅은 보통 2회 호출되어 추가 비용·지연이 발생합니다. 분류 형식 오류·토큰 소진·연결 실패는 `high`로 진행하고, 인증·호출 한도 등 HTTP 오류는 즉시 알립니다. 분류는 모델 판단이므로 항상 정확하지 않습니다. 긴 질문의 앞부분이나 오래된 맥락이 중요하면 수동으로 `high`/`max`를 지정하세요.
+
+최종 답변만 **한 번에 표시**하며 추론 내용은 반환하지 않습니다. EXAONE 자체의 추론은 끌 수 없습니다. 제목·태그 등 백그라운드 작업은 분류 없이 `low`를 사용합니다. 답변이 잘리면 성공으로 반환하지 않고 `MAX_TOKENS` 증가 또는 질문 분할을 안내합니다. 기본 답변 토큰 한도는 16,384이며 추론도 포함합니다. 분류 한도는 2,048, 분류 대기는 30초, 답변 대기는 기본 180초입니다. 자동 재시도·답변 후 재평가·상위 강도로 재생성은 없습니다.
+
+검증: 실제 httpx/Pydantic과 모의 HTTP 응답으로 12개 오프라인 테스트를 통과했습니다. 유료 EXAONE 호출, 실제 분류 품질·응답 속도 및 OpenWebUI 서버 설치는 확인하지 않았습니다. GitHub 업로드만으로 운영 서버에 설치되지는 않습니다.
+
+근거: [EXAONE API](https://docs.exaone.ai/ko/docs/k-exaone-2.5), [OpenWebUI Pipe](https://docs.openwebui.com/features/extensibility/plugin/functions/pipe/).
 
 ## 1. 어떤 환경을 기준으로 하나요?
 

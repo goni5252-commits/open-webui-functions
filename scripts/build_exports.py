@@ -8,7 +8,7 @@ import re
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
-IDS = ('openai_responses', 'google_gemini', 'google_gemini_rag_bypass', '한글문서_내보내기', '엑셀로_내보내기')
+IDS = ('exaone_auto', 'openai_responses', 'google_gemini', 'google_gemini_rag_bypass', '한글문서_내보내기', '엑셀로_내보내기')
 
 
 def header(code):
@@ -56,10 +56,18 @@ def build(fid):
             raise ValueError('This version is already published. Increase the source version first.')
         payload = versioned.read_text(encoding='utf-8')
     else:
-        items = copy.deepcopy(read_export(latest))
-        old_version = header(items[0]['content'])['version']
-        if tuple(map(int, manifest['version'].split('.'))) <= tuple(map(int, old_version.split('.'))):
-            raise ValueError('Increase the source version above the current latest export.')
+        if latest.exists():
+            items = copy.deepcopy(read_export(latest))
+            old_version = header(items[0]['content'])['version']
+            if tuple(map(int, manifest['version'].split('.'))) <= tuple(map(int, old_version.split('.'))):
+                raise ValueError('Increase the source version above the current latest export.')
+        else:
+            # Bootstrap a new Pipe without borrowing another function's identity/settings.
+            if not any(isinstance(node, ast.ClassDef) and node.name == 'Pipe'
+                       for node in ast.parse(code).body):
+                raise ValueError('New exports currently support Pipe functions only.')
+            items = [{'id': fid, 'name': manifest.get('title', fid), 'type': 'pipe',
+                      'is_active': False, 'is_global': False, 'created_at': int(time.time())}]
         items[0].pop('user_id', None)
         items[0]['content'] = code
         items[0]['updated_at'] = int(time.time())
