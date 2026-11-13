@@ -4,11 +4,16 @@ author: owndev and olivier-lacroix. editied by goni5252
 author_url: https://github.com/owndev/
 project_url: https://github.com/owndev/Open-WebUI-Functions
 funding_url: https://github.com/sponsors/owndev
-version: 1.25.1
+version: 1.26.0
 required_open_webui_version: 0.9.0
 requirements: google-genai==3.3.0
 license: Apache License 2.0
 description: Google Gemini pipeline with Gemini 4 Hydrogen support, local Auto Thinking routing, automatic Google Search grounding, Nano Banana 2 image routing/editing, OCR, RAG bypass, and robust tool handling.
+changes_1_26_0:
+  - Enable local low/medium/high Auto Thinking for Gemini 4 Hydrogen
+  - Cap Hydrogen xhigh at high, including saved manual settings
+  - Use bounded recent context for explicit Hydrogen reasoning follow-ups
+  - Retain intent-selected conversational images and tool-free streaming
 changes_1_25_1:
   - Declare the tested google-genai 3.3.0 dependency in Open WebUI frontmatter
 changes_1_25_0:
@@ -337,7 +342,7 @@ class Pipe:
         AUTO_THINKING: bool = Field(
             default=os.getenv("GOOGLE_AUTO_THINKING", "true").lower() == "true",
             description=(
-                "Automatically choose Gemini thinking_level from the current request "
+                "Automatically choose Gemini 3 Flash / Gemini 4 Hydrogen thinking_level from the current request "
                 "using local heuristics only (no extra router API call). Explicit "
                 "per-chat reasoning_effort always wins."
             ),
@@ -645,7 +650,7 @@ class Pipe:
         THINKING_LEVEL: str = Field(
             default=os.getenv("GOOGLE_THINKING_LEVEL", ""),
             description=(
-                "Manual fallback thinking level. Gemini 4 Hydrogen supports low/medium/high/xhigh. "
+                "Manual fallback thinking level. Gemini 4 Hydrogen uses low/medium/high; xhigh is capped at high. "
                 "Gemini 3.7+ Flash "
                 "supports low/medium/high (minimal is not supported); Gemini 3.5/3.6 "
                 "Flash support minimal/low/medium/high. Some Pro/image variants expose "
@@ -1799,6 +1804,11 @@ class Pipe:
                 "Falling back to model default."
             )
             return None
+
+        # Hydrogen deliberately limits reasoning cost/latency to high, even
+        # when an older saved chat or Valve still requests xhigh.
+        if model_id.lower() == "gemini-4-hydrogen" and normalized == "xhigh":
+            normalized = "high"
 
         supported_levels = self._get_supported_thinking_levels(model_id)
         if not supported_levels or normalized in supported_levels:
@@ -4181,7 +4191,7 @@ class Pipe:
         return False
 
     def _is_auto_thinking_candidate_model(self, model_id: str) -> bool:
-        """Auto-route thinking only for Gemini 3.x Flash text models.
+        """Auto-route thinking for Gemini 3.x Flash and Gemini 4 Hydrogen.
 
         OCR, image, video, Pro, and older Gemini 2.5 models keep their existing
         dedicated/default thinking behavior.
@@ -4193,7 +4203,9 @@ class Pipe:
             return False
         if self._check_video_generation_support(model_lower):
             return False
-        return "flash" in model_lower and "image" not in model_lower
+        return model_lower == "gemini-4-hydrogen" or (
+            "flash" in model_lower and "image" not in model_lower
+        )
 
     @staticmethod
     def _attachment_identity(entry: Any) -> Optional[str]:
@@ -4373,6 +4385,19 @@ class Pipe:
 
         text = self._last_user_text(body)
         score, reasons = self._auto_thinking_text_score(text)
+        # Consult one bounded prior user request only for explicit follow-ups.
+        # Ordinary thanks/new questions must not inherit old expensive reasoning.
+        if model_id.lower() == "gemini-4-hydrogen" and len(text) <= 200 and re.search(
+            r"^(?:그 부분|그 이유|왜 그런|이어서|계속해|더 자세히|좀 더 자세히|"
+            r"continue\b|explain (?:that|why)\b|more detail\b)", text.strip(), re.I
+        ):
+            recent = (body.get("messages") or [])[-8:]
+            previous_users = [m for m in recent if isinstance(m, dict) and m.get("role") == "user"]
+            if len(previous_users) >= 2:
+                previous_text = self._last_user_text({"messages": [previous_users[-2]]})[:4000]
+                previous_score, _ = self._auto_thinking_text_score(previous_text)
+                score = max(score, previous_score)
+                reasons.append("bounded prior request for explicit follow-up")
         total_files, image_files, document_files = self._count_request_attachments(
             body, __metadata__
         )
