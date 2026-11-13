@@ -114,7 +114,7 @@ USER user
 
 ## 5. 함수와 전체 사용자 연결
 
-`function-openai_responses-v1.7.8.json`을 OpenWebUI 함수에 가져옵니다. 기존 Valve/API 설정을 확인하고 다음을 설정합니다.
+`function-openai_responses.json`을 OpenWebUI 함수에 가져옵니다. 기존 Valve/API 설정을 확인하고 다음을 설정합니다.
 
 - `ENABLE_TERMINAL_HARNESS=True`: 전체 기능 연결 활성화. 이전 ENABLE_PRESENTATION_DESIGN 값은 최초 로드 시 새 설정으로 이전됩니다. 새 설정이 명시돼 있으면 새 값이 우선합니다.
 - `TERMINAL_HARNESS_ROOT=/opt/openwebui-harness`

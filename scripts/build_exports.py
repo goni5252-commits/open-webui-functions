@@ -30,7 +30,14 @@ def read_export(path):
 
 
 def check():
-    exports = {p: read_export(p) for p in ROOT.glob('function-*.json')}
+    expected = {ROOT / f'function-{fid}.json' for fid in IDS}
+    actual = set(ROOT.glob('function-*.json'))
+    if actual != expected:
+        raise ValueError('Keep exactly one latest function-<id>.json export per function')
+    exports = {p: read_export(p) for p in actual}
+    for p, items in exports.items():
+        if p.name != f'function-{items[0]["id"]}.json':
+            raise ValueError(f'{p.name}: function ID differs from filename')
     for fid in IDS:
         code = (ROOT / 'functions' / f'{fid}.py').read_text(encoding='utf-8')
         manifest = header(code)
@@ -49,34 +56,32 @@ def build(fid):
     code = (ROOT / 'functions' / f'{fid}.py').read_text(encoding='utf-8')
     manifest = header(code)
     latest = ROOT / f'function-{fid}.json'
-    versioned = ROOT / f'function-{fid}-v{manifest["version"]}.json'
-    if versioned.exists():
-        items = read_export(versioned)
-        if items[0]['content'] != code:
-            raise ValueError('This version is already published. Increase the source version first.')
-        payload = versioned.read_text(encoding='utf-8')
+    if latest.exists():
+        items = copy.deepcopy(read_export(latest))
+        old_code = items[0]['content']
+        old_version = header(old_code)['version']
+        current = tuple(map(int, manifest['version'].split('.')))
+        previous = tuple(map(int, old_version.split('.')))
+        # Metadata/documentation cleanup may retain the version; runtime changes may not.
+        before, after = ast.parse(old_code), ast.parse(code)
+        before.body = before.body[1:]
+        after.body = after.body[1:]
+        if current < previous or (current == previous and ast.dump(before) != ast.dump(after)):
+            raise ValueError('Increase the source version for runtime changes; downgrades are not allowed.')
     else:
-        if latest.exists():
-            items = copy.deepcopy(read_export(latest))
-            old_version = header(items[0]['content'])['version']
-            if tuple(map(int, manifest['version'].split('.'))) <= tuple(map(int, old_version.split('.'))):
-                raise ValueError('Increase the source version above the current latest export.')
-        else:
-            # Bootstrap a new Pipe without borrowing another function's identity/settings.
-            if not any(isinstance(node, ast.ClassDef) and node.name == 'Pipe'
-                       for node in ast.parse(code).body):
-                raise ValueError('New exports currently support Pipe functions only.')
-            items = [{'id': fid, 'name': manifest.get('title', fid), 'type': 'pipe',
-                      'is_active': False, 'is_global': False, 'created_at': int(time.time())}]
-        items[0].pop('user_id', None)
-        items[0]['content'] = code
-        items[0]['updated_at'] = int(time.time())
-        items[0].setdefault('meta', {})['manifest'] = manifest
-        items[0]['meta']['description'] = manifest.get('description', '')
-        payload = json.dumps(items, ensure_ascii=False, indent=2) + '\n'
-        versioned.write_text(payload, encoding='utf-8')
-    latest.write_text(payload, encoding='utf-8')
-    print(f'Generated {latest.name} and {versioned.name}')
+        if not any(isinstance(node, ast.ClassDef) and node.name == 'Pipe'
+                   for node in ast.parse(code).body):
+            raise ValueError('New exports currently support Pipe functions only.')
+        items = [{'id': fid, 'name': manifest.get('title', fid), 'type': 'pipe',
+                  'is_active': False, 'is_global': False, 'created_at': int(time.time())}]
+    items[0].pop('user_id', None)
+    items[0]['content'] = code
+    items[0]['updated_at'] = int(time.time())
+    items[0].setdefault('meta', {})['manifest'] = manifest
+    items[0]['meta']['description'] = manifest.get('description', '')
+    latest.write_text(json.dumps(items, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+    print(f'Generated {latest.name}')
+
 
 
 if __name__ == '__main__':

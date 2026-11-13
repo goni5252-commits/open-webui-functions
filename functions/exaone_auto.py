@@ -6,9 +6,6 @@ version: 1.0.0
 license: MIT
 required_open_webui_version: 0.11.0
 description: 텍스트 대화의 난이도에 따라 EXAONE 추론 강도를 자동 선택합니다.
-Changelog (v1.0.0):
-- Add text-only async Pipe, low/high/max classifier, manual override and safe high fallback.
-- Return final answer only; reject unsupported media and report truncated responses.
 """
 
 import json

@@ -1,7 +1,4 @@
-import ast
-import json
 import unittest
-from pathlib import Path
 from unittest.mock import AsyncMock
 from test_responses import m
 
@@ -46,29 +43,5 @@ class RegistrationTests(unittest.IsolatedAsyncioTestCase):
         specs={s['name']:s for s in specs}
         self.assertTrue(specs['prepare_terminal_files']['strict'])
         self.assertEqual(set(specs['prepare_terminal_files']['parameters']['required']),{'file_ids','purpose'})
-
-    def test_original_functions_preserved(self):
-        original=Path(__file__).resolve().parents[1]/'function-openai_responses-v1.7.4.json'
-        new=Path(m.__file__).read_text()
-        def functions(text):
-            out={}
-            def visit(nodes,prefix=''):
-                for n in nodes:
-                    if isinstance(n,(ast.FunctionDef,ast.AsyncFunctionDef)):
-                        out[prefix+n.name]=ast.dump(n,include_attributes=False)
-                    elif isinstance(n,ast.ClassDef): visit(n.body,prefix+n.name+'.')
-            visit(ast.parse(text).body)
-            return out
-        before,after=functions(json.loads(original.read_text())[0]["content"]),functions(new)
-        changed={k for k,v in before.items() if after.get(k)!=v}
-        # v1.8.1 adds model exposure and GPT-6.1 parameter compatibility.
-        # v1.8.4 normalizes renamed manifold IDs before model routing.
-        # v1.8.5 retains bounded recent attachments in router input.
-        # v1.8.6 migrates saved Luna response tiers to Terra.
-        self.assertEqual(changed,{'Pipe.pipe','Pipe._pipe_impl','Pipe._run_streaming_loop',
-            'Pipe._run_ocr_model','Pipe._validate_ocr_result','ModelFamily.is_ocr_model',
-            'Pipe._inject_native_hwpx_context','build_tools','Pipe.pipes',
-            'ModelFamily.reasoning_efforts','ModelFamily._norm','_prepare_responses_request',
-            'Pipe._route_auto_model_and_reasoning','Pipe.Valves._migrate_routing_policy','Pipe.__init__','_build_router_input'})
 
 if __name__=='__main__': unittest.main()

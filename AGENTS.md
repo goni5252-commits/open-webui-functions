@@ -1,13 +1,11 @@
-# Codex 작업 완료 절차
+# 저장소 관리 및 게시 절차
 
-사용자는 Codex에서 함수 수정이 완료될 때 변경 내역을 남기고 이 저장소에 업로드하는 것을 요청했다. 이 저장소에서의 함수 수정 요청은 아래 절차를 포함한다. 사용자가 게시를 보류하거나 초안만 요청하면 그 지시를 우선한다.
-
-1. 시작할 때 `git status`와 원격 변경을 확인한다. 기존 미커밋 변경을 덮어쓰지 않는다. main이 깨끗하면 `git pull --ff-only origin main`으로 동기화한다.
-2. `functions/<함수 ID>.py`를 편집한다. 기존 버전, 라이선스, 작성자 표시를 보존하고 코드 변경에 맞춰 헤더의 version 및 변경 내역을 갱신한다. 이미 공개된 버전 번호를 재사용하지 않는다.
-3. 변경한 함수에 대해 `python3 scripts/build_exports.py <함수 ID>`를 실행한다. 기존 버전별 JSON은 수정하지 않는다.
-4. 관련 동작 테스트를 수행하고 `python3 scripts/build_exports.py --check`로 원본 및 배포 파일을 검증한다. 문법 검증만으로 실서비스 동작 검증을 주장하지 않는다.
-5. `CHANGELOG.md` 상단에 날짜, 함수명, 버전, 사용자에게 영향을 주는 변경점, 실제 수행한 검증과 한계를 한국어로 기록한다. 필요하면 README도 갱신한다.
-6. diff를 확인하고 비밀값이나 무관한 사용자 파일이 없는지 검토한다. 작업에 필요한 파일만 지정해 `bash scripts/publish.sh "구체적인 커밋 메시지" <파일 경로...>`를 실행한다. CHANGELOG.md도 경로에 포함한다. 파일 저장마다 게시하는 것이 아니라 작업과 검증이 완료된 시점에 게시한다.
-7. push 성공 후 `git ls-remote origin refs/heads/main`과 로컬 HEAD가 같은지 확인하고 사용자에게 변경점, 테스트, 커밋 링크를 알린다. 인증·네트워크·브랜치 보호 문제는 성공으로 보고하지 않는다. force push는 하지 않는다.
-
-publish.sh는 main에서만 실행한다. 작업 브랜치를 사용했다면 정책에 맞는 PR 절차로 반영하며 main에 강제 전환하지 않는다. push가 실패한 경우 생성된 커밋을 보존하고 원인을 해결한 후 일반 push로 재시도한다. GitHub 업로드는 OpenWebUI 서버에 함수를 설치하는 작업을 포함하지 않는다.
+- 작업 시작 시 `git status`로 사용자 변경을 확인한다. main이 깨끗하면 `git pull --ff-only origin main`으로 동기화한다.
+- 함수 원본은 `functions/<함수 ID>.py`, 배포 파일은 `function-<함수 ID>.json` 하나씩 유지한다. 버전별 JSON과 누적 CHANGELOG는 만들지 않는다. 이전 버전은 Git 기록으로 관리한다.
+- 실행 코드 변경은 헤더 version을 올린다. 설명·주석만 정리할 때는 실행 AST가 같음을 검증하고 버전을 유지할 수 있다. 작성자·라이선스·의존성 정보를 보존한다.
+- 수정 후 `python3 scripts/build_exports.py <함수 ID>`를 실행한다. README에는 최신 기능·버전·필수 설정만 간단히 유지한다. 코드 헤더에 누적 변경 내역을 넣지 않는다.
+- 관련 동작 테스트, `python3 scripts/build_exports.py --check`, `python3 scripts/build_harness.py --check`, `git diff --check`를 수행한다. 실제 API/서버 미검증 사항은 정확히 알린다.
+- diff와 삭제 목록을 확인하고 필요한 경로만 지정해 `bash scripts/publish.sh "구체적인 커밋 메시지" <파일 경로...>`로 게시한다. 추적된 삭제 파일도 명시한다. 사용자 요청이 초안/로컬 작업이면 게시하지 않는다.
+- 게시 후 `git ls-remote origin refs/heads/main`과 로컬 HEAD가 같은지 확인한다. force push/과거 Git 기록 재작성은 하지 않는다.
+- publish.sh는 main 전용이다. 작업 브랜치에서는 PR 절차를 따른다. 인증·네트워크 실패를 성공으로 보고하지 않으며 토큰을 채팅으로 요청하지 않는다.
+- GitHub 업로드는 OpenWebUI 서버 설치를 포함하지 않는다.
