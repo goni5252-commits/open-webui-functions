@@ -1,5 +1,13 @@
 # 업데이트 내역
 
+## 2026-11-14 — Google Gemini v1.25.0
+
+- Gemini 4 Hydrogen (`gemini-4-hydrogen`)을 기본 추가 모델과 모델 목록에 등록했습니다. 이전 `MODEL_ADDITIONAL` 저장값에서도 표시되며 사용자 `MODEL_WHITELIST` 필터는 유지합니다. API 목록과 중복 등록하지 않습니다.
+- Hydrogen의 `low/medium/high/xhigh` 추론 강도를 지원합니다. 대화별 설정이 함수 설정보다 우선하며 `minimal`은 `low`로 보정합니다. 기존 Flash 전용 Auto Thinking 범위는 유지하므로 Hydrogen에서 수동 설정이 없으면 제공자 기본값을 사용합니다. `thinking_budget`과 레거시 샘플링 파라미터는 전송하지 않습니다.
+- 기존 Gemini 2.5 budget, Gemini 3 수준 보정, OCR 및 이미지 생성 모델은 유지합니다. README에 기존 함수 교체, 허용 목록, SDK 2.34.0 이상 및 공식 모델 문서 링크를 추가했습니다.
+- 검증: Python 3.12 / google-genai 3.3.0에서 전체 오프라인 테스트 252개 중 250개 통과·2개 생략(Node 브라우저 계약). 신규 5개 테스트로 SDK 추론 구성 4단계, budget/샘플링 제외, minimal 보정, 설정 우선순위, 기본값 유지, 저장 설정·API 중복·허용 목록, 함수 ID 접두사와 구형 모델 호환을 확인했습니다. 배포 JSON/원본·harness 일치 및 diff 검사를 수행했습니다.
+- 한계: 실제 유료 Hydrogen API, 계정 접근 권한, OpenWebUI 서버 설치는 검증하지 않았습니다. 새 Office 네이티브 입력 및 장문 continuation 동작은 이번 변경의 구현·검증 범위에 포함하지 않습니다. GitHub 업로드 후 서버의 기존 함수에 별도로 적용해야 합니다.
+
 ## 2026-11-10 — EXAONE Auto v1.0.0
 
 - 독립 Pipe `exaone_auto`를 추가했습니다. K-EXAONE 2.5 텍스트 대화에서 최근 맥락을 low 요청으로 분류한 뒤 low/high/max 추론 강도로 최종 답변을 한 번에 반환합니다. 관리자·사용자별 수동 강도 설정과 API 키 환경변수 대체를 지원합니다.

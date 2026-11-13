@@ -4,10 +4,14 @@ author: owndev and olivier-lacroix. editied by goni5252
 author_url: https://github.com/owndev/
 project_url: https://github.com/owndev/Open-WebUI-Functions
 funding_url: https://github.com/sponsors/owndev
-version: 1.24.6
+version: 1.25.0
 required_open_webui_version: 0.9.0
 license: Apache License 2.0
-description: Google Gemini pipeline with Gemini 3.7 support, local Auto Thinking routing, automatic Google Search grounding, Nano Banana 2 image routing/editing, OCR, RAG bypass, and robust tool handling.
+description: Google Gemini pipeline with Gemini 4 Hydrogen support, local Auto Thinking routing, automatic Google Search grounding, Nano Banana 2 image routing/editing, OCR, RAG bypass, and robust tool handling.
+changes_1_25_0:
+  - Register Gemini 4 Hydrogen even with previously saved additional-model settings
+  - Support Hydrogen low/medium/high/xhigh thinking without legacy thinking budgets
+  - Normalize unsupported minimal to low and retain modern sampling cleanup
 changes_1_24_6:
   - Omit terminal tools for attached visual/text reviews without operational intent
   - Finalize unresolved automatic tool calls once without executing or retrying tools
@@ -633,12 +637,13 @@ class Pipe:
         THINKING_BUDGET: int = Field(
             default=int(os.getenv("GOOGLE_THINKING_BUDGET", "-1")),
             description="Thinking budget for Gemini 2.5 models (0=disabled, -1=dynamic, 1-32768=fixed token limit). "
-            "Not used for Gemini 3 models which use THINKING_LEVEL instead.",
+            "Not used for Gemini 3 or Gemini 4 Hydrogen, which use THINKING_LEVEL instead.",
         )
         THINKING_LEVEL: str = Field(
             default=os.getenv("GOOGLE_THINKING_LEVEL", ""),
             description=(
-                "Manual fallback thinking level for Gemini 3 models. Gemini 3.7+ Flash "
+                "Manual fallback thinking level. Gemini 4 Hydrogen supports low/medium/high/xhigh. "
+                "Gemini 3.7+ Flash "
                 "supports low/medium/high (minimal is not supported); Gemini 3.5/3.6 "
                 "Flash support minimal/low/medium/high. Some Pro/image variants expose "
                 "narrower sets. Empty string means use the model default when Auto "
@@ -757,11 +762,11 @@ class Pipe:
         MODEL_ADDITIONAL: str = Field(
             default=os.getenv(
                 "GOOGLE_MODEL_ADDITIONAL",
-                "gemini-3.7-flash,gemini-3.1-flash-image",
+                "gemini-4-hydrogen,gemini-3.7-flash,gemini-3.1-flash-image",
             ),
             description=(
                 "A comma-separated list of model IDs to manually add to the list of "
-                "available models. Defaults include Gemini 3.7 Flash and the GA "
+                "available models. Defaults include Gemini 4 Hydrogen, Gemini 3.7 Flash and the GA "
                 "Nano Banana 2 model gemini-3.1-flash-image."
             ),
         )
@@ -1481,6 +1486,18 @@ class Pipe:
 
             model_map = {model["id"]: model for model in available_models}
 
+            # Saved Valves keep old MODEL_ADDITIONAL defaults after upgrades.
+            # Register Hydrogen before the user's whitelist is applied.
+            model_map.setdefault("gemini-4-hydrogen", {
+                "id": "gemini-4-hydrogen",
+                "name": "Gemini 4 Hydrogen",
+                "image_generation": False,
+                "video_generation": False,
+            })
+
+            if model_map["gemini-4-hydrogen"]["name"] == "gemini-4-hydrogen":
+                model_map["gemini-4-hydrogen"]["name"] = "Gemini 4 Hydrogen"
+
             # Nano Banana 2 preview was shut down in June 2026. Do not expose
             # the retired preview ID even if a stale SDK/cache still lists it.
             model_map.pop("gemini-3.1-flash-image-preview", None)
@@ -1659,15 +1676,13 @@ class Pipe:
         ):
             return False
 
-        return model_id.startswith("gemini-2.5-") or self._is_gemini_3_family_model(
-            model_id
-        )
+        return model_id.startswith("gemini-2.5-") or self._check_thinking_level_support(model_id)
 
     def _check_thinking_level_support(self, model_id: str) -> bool:
         """
         Check if a model supports the thinking_level parameter.
 
-        Gemini 3 models support thinking_level and should NOT use thinking_budget.
+        Gemini 3 and Gemini 4 Hydrogen use thinking_level, never thinking_budget.
         Other models (like Gemini 2.5) use thinking_budget instead.
 
         Args:
@@ -1676,10 +1691,10 @@ class Pipe:
         Returns:
             True if the model supports thinking_level, False otherwise
         """
-        return self._is_gemini_3_family_model(model_id)
+        return self._is_gemini_3_family_model(model_id) or model_id.lower() == "gemini-4-hydrogen"
 
     def _get_supported_thinking_levels(self, model_id: str) -> List[str]:
-        """Return known/compatible thinking levels for a Gemini 3 model.
+        """Return known/compatible thinking levels for the selected Gemini model.
 
         Google documents Gemini 3.7 Flash (and current 3.8 Flash) as supporting
         low/medium/high only; sending minimal to 3.7 returns an API error.
@@ -1687,6 +1702,9 @@ class Pipe:
         (Gemini 3.1 Flash Image) supports minimal/high.
         """
         model_lower = model_id.lower()
+
+        if model_lower == "gemini-4-hydrogen":
+            return ["low", "medium", "high", "xhigh"]
 
         # Nano Banana 2 / Flash-Lite Image use a deliberately narrow control surface.
         if model_lower.startswith(
@@ -1735,7 +1753,7 @@ class Pipe:
         if not supported_levels:
             return None
 
-        level_rank = {"minimal": 0, "low": 1, "medium": 2, "high": 3}
+        level_rank = {"minimal": 0, "low": 1, "medium": 2, "high": 3, "xhigh": 4}
         requested_rank = level_rank.get(requested_level)
         if requested_rank is None:
             return None
@@ -1770,7 +1788,7 @@ class Pipe:
             return None
 
         normalized = level.strip().lower()
-        valid_levels = ["minimal", "low", "medium", "high"]
+        valid_levels = ["minimal", "low", "medium", "high", "xhigh"]
 
         if normalized not in valid_levels:
             self.log.warning(

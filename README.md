@@ -15,7 +15,7 @@ OpenWebUI 대화에서 **학교 양식으로 HWPX를 작성하고, 디자인을 
 | [OpenAI Responses v1.8.7 JSON](function-openai_responses-v1.8.7.json) · [직접 다운로드](https://raw.githubusercontent.com/goni5252-commits/open-webui-functions/main/function-openai_responses-v1.8.7.json) | 이 안내에서 사용하는 함수 |
 | [엑셀 내보내기 v0.4.0 JSON](function-엑셀로_내보내기-v0.4.0.json) | 답변의 Markdown 표를 XLSX로 저장하는 Action (Open WebUI 0.11.4+) |
 | [한글 내보내기 v3.4.0 JSON](function-한글문서_내보내기-v3.4.0.json) | 기존 답변을 HWPX로 저장하는 Action (Open WebUI 0.11.4+) |
-| [Google Gemini v1.24.1 JSON](function-google_gemini-v1.24.1.json) | 별도 Gemini 함수 |
+| [Google Gemini v1.25.0 JSON](function-google_gemini-v1.25.0.json) | 별도 Gemini 함수 |
 | [Gemini RAG Bypass JSON](function-google_gemini_rag_bypass.json) | 별도 RAG Bypass 함수 |
 
 [변경 내역](CHANGELOG.md) · [OpenAI 함수 Python 원본](functions/openai_responses.py)
@@ -61,6 +61,18 @@ OpenWebUI 대화에서 **학교 양식으로 HWPX를 작성하고, 디자인을 
 근거: [GPT-6.1 Sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol), [OpenAI 파일 입력](https://developers.openai.com/api/docs/guides/file-inputs), [Mistral OCR API](https://docs.mistral.ai/api/endpoint/ocr), [OpenWebUI Mistral 설정](https://docs.openwebui.com/features/chat-conversations/rag/document-extraction/mistral-ocr/), [File Context 설정](https://docs.openwebui.com/features/chat-conversations/rag/#file-context-vs-builtin-tools).
 
 스캔 PDF 전사는 모델 목록에서 **`gpt-6-ocr`**를 선택하세요. GPT-6 Luna(`low`)로 먼저 읽고, 출력 검사에 실패한 묶음만 GPT-6 Sol(`medium`)로 재시도합니다. 원본 PDF 전송·RAG 우회·기본 10페이지 분할을 사용합니다. 기존 `gpt-5.6-ocr` 대화도 새 경로로 연결되며, 저장된 모델 목록과 이전 OCR fallback 설정은 자동 이전됩니다. 재시도를 끈 설정은 유지됩니다. 새 설정 이름은 `OCR_SOL_FALLBACK`입니다.
+
+## Gemini 4 Hydrogen 사용 (Google Gemini v1.25.0)
+
+기존 Google Gemini 함수의 코드를 `functions/google_gemini.py`로 교체하거나 [v1.25.0 JSON](function-google_gemini-v1.25.0.json)을 가져와 저장한 뒤, 모델 목록에서 **Gemini 4 Hydrogen** (`gemini-4-hydrogen`)을 선택하세요. 기존 함수 ID와 대화 연결을 유지하려면 코드 교체 방식을 사용하세요. GitHub 업로드만으로 OpenWebUI 서버에 설치되지는 않습니다.
+
+- 이전 `MODEL_ADDITIONAL` 설정을 유지해도 Hydrogen을 목록에 추가합니다. `MODEL_WHITELIST`를 사용 중이면 `gemini-4-hydrogen`을 허용 목록에 추가하세요. 목록 캐시가 남으면 `MODEL_CACHE_TTL` 경과 후 다시 확인하세요.
+- 대화의 `reasoning_effort` 또는 함수의 `THINKING_LEVEL`에서 `low`, `medium`, `high`, `xhigh`를 지정할 수 있습니다. `minimal`은 `low`로 보정합니다. Hydrogen에는 기존 Flash 전용 Auto Thinking을 적용하지 않으며, 설정이 비어 있으면 제공자 기본값 `high`를 사용합니다.
+- `thinking_budget`과 `temperature/top_p/top_k`를 보내지 않습니다. 이미지 입력은 가능하지만 Hydrogen 자체를 이미지 생성 모델로 등록하지 않습니다. 기존 이미지 도구와 OCR 전용 모델은 유지합니다.
+- [공식 시작 가이드](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/start/get-started-with-gemini-4)에 따라 서버의 `google-genai`를 **2.34.0 이상**으로 업데이트하세요. Vertex AI 사용 시 공식 지원 위치는 `global`, `us`, `eu`이며 계정의 모델 접근 권한이 필요합니다.
+- 이번 검증은 SDK 설정과 모의 API 기반입니다. 실제 유료 API 호출, 계정 접근 권한, 장문 continuation 및 서버 설치는 확인하지 않았습니다. Office 파일의 새 네이티브 입력 기능을 위한 첨부 처리 변경은 포함하지 않습니다.
+
+모델 사양: [Gemini 4 Hydrogen](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/4-hydrogen), [개발자 가이드](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/guides/gemini-4-hydrogen).
 
 ## EXAONE 2.5 텍스트 전용 함수
 
@@ -329,7 +341,6 @@ Open WebUI **0.11.4 이상**을 대상으로 합니다. 기존 함수와 설정�
 구분선이 있는 파이프 Markdown 표를 지원합니다. HTML 표·병합 셀·중첩 표는 지원하지 않습니다. 빈 헤더는 ColN으로 채우고 추가 열도 보존합니다. 다운로드 성공 문구는 브라우저의 실행 응답까지 확인한 상태이며 OS의 최종 저장 완료를 보장하지 않습니다. 서버 WebSocket 제한으로 큰 파일이 실패하면 범위를 줄여 다시 실행하세요.
 
 검증: `python3 -m unittest discover -s tests -p test_excel_export.py` (pandas, xlsxwriter, openpyxl, Pydantic 2 필요; JavaScript 검사에는 PATH의 Node 필요). 실제 Excel에서의 표시·인쇄는 별도 확인이 필요합니다.
-
 
 ## 8. 대화 중 이미지 생성·수정
 
