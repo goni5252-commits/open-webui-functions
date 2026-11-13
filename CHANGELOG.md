@@ -1,5 +1,12 @@
 # 업데이트 내역
 
+## 2026-11-14 — Google Gemini v1.25.1
+
+- 누락된 SDK 의존성 선언을 함수 헤더에 추가했습니다. `requirements: google-genai==3.3.0`으로 v1.25.0에서 전체 회귀 테스트를 통과한 SDK 버전을 고정하며, 새 배포 JSON의 코드와 manifest에도 포함됩니다. Hydrogen 모델 및 요청 처리 로직은 변경하지 않았습니다.
+- README에 자동 의존성 설치의 활성화 조건과 OFFLINE_MODE/자동 설치 비활성화 시 직접 설치 방법, 기존 SDK가 로드된 서버의 재시작 안내를 추가했습니다.
+- 검증: Google SDK 3.3.0에서 Hydrogen 관련 5개 테스트 통과. 설치된 SDK 버전·원본 헤더·최신 및 버전별 JSON manifest 일치, 전체 배포 원본/JSON 일치, harness 및 diff 검사를 수행했습니다.
+- 한계: 실제 OpenWebUI 서버의 pip 설치·재시작·유료 API 호출은 수행하지 않았습니다. 자동 설치가 비활성화되었거나 패키지 다운로드/설치가 실패하는 환경까지 헤더만으로 해결되지는 않습니다.
+
 ## 2026-11-14 — Google Gemini v1.25.0
 
 - Gemini 4 Hydrogen (`gemini-4-hydrogen`)을 기본 추가 모델과 모델 목록에 등록했습니다. 이전 `MODEL_ADDITIONAL` 저장값에서도 표시되며 사용자 `MODEL_WHITELIST` 필터는 유지합니다. API 목록과 중복 등록하지 않습니다.

@@ -4,10 +4,13 @@ author: owndev and olivier-lacroix. editied by goni5252
 author_url: https://github.com/owndev/
 project_url: https://github.com/owndev/Open-WebUI-Functions
 funding_url: https://github.com/sponsors/owndev
-version: 1.25.0
+version: 1.25.1
 required_open_webui_version: 0.9.0
+requirements: google-genai==3.3.0
 license: Apache License 2.0
 description: Google Gemini pipeline with Gemini 4 Hydrogen support, local Auto Thinking routing, automatic Google Search grounding, Nano Banana 2 image routing/editing, OCR, RAG bypass, and robust tool handling.
+changes_1_25_1:
+  - Declare the tested google-genai 3.3.0 dependency in Open WebUI frontmatter
 changes_1_25_0:
   - Register Gemini 4 Hydrogen even with previously saved additional-model settings
   - Support Hydrogen low/medium/high/xhigh thinking without legacy thinking budgets
