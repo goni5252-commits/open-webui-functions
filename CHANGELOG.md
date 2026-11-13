@@ -1,5 +1,13 @@
 # 업데이트 내역
 
+## 2026-11-14 — Google Gemini v1.26.1
+
+- `gemini-4-hydrogen-ocr` / “Gemini 4 Hydrogen 한글 OCR (High-Res)”를 추가했습니다. 실제 API 모델은 Hydrogen으로 고정하며 이전 Flash OCR 및 저장된 OCR_BASE_MODEL_ID는 유지합니다. ENABLE_OCR_VIRTUAL_MODEL과 MODEL_WHITELIST를 따릅니다.
+- 기존 한글 전사 프롬프트·고해상도·low 추론·thought 숨김·검색/네이티브 도구 제외 기본값을 재사용합니다. OCR_* 설정을 기존 OCR과 공유하며 일반 Auto Thinking·대화형 이미지 생성 경로는 적용하지 않습니다.
+- 기존 RAG Bypass Companion의 metadata 원본 전달 경로와 전체 PDF 강제 전달을 재사용합니다. 원본 PDF 읽기 실패 시 일부 추출 텍스트로 대체하지 않고 중단합니다. README에 필터 활성화/모델 적용, 사용자 정의 함수 ID 접두사, OCR 모델 허용 목록 설정을 안내했습니다. 필터 코드/배포 파일은 변경하지 않았습니다.
+- 검증: Python 3.12 / Google SDK 3.3.0에서 전체 오프라인 테스트 260개 중 258개 통과·2개 생략(Node 브라우저 계약). 신규 3개 테스트에서 모델 등록/Flash 보존/별칭 매핑/비활성화·OCR SDK 설정, 실제 Companion → Pipe 경로의 원본 PDF 바이트 일치·RAG 문맥 제거·Hydrogen 요청·한글 프롬프트·Auto Thinking/이미지 도구 제외, 원본 누락 시 API 미호출을 확인했습니다. 배포 JSON/원본·harness 및 diff 검사 완료.
+- 한계: 모의 파일/HTTP 경계 검증이며 실제 서버의 필터 실행 순서, 유료 API OCR 정확도/지연, 서버 설치는 확인하지 않았습니다. 백엔드 검색 자체를 막으려면 Companion 필터가 해당 모델에 적용되어야 합니다. 모델 학습이나 OCR 정확도 보장을 의미하지 않습니다.
+
 ## 2026-11-14 — Google Gemini v1.26.0
 
 - Gemini 4 Hydrogen에 기존 로컬 Auto Thinking을 활성화했습니다. 기본 low/medium/high 설정으로 간단한 대화, 비교·분석/문서, 증명·복잡한 디버깅을 구분하며 별도 분류 API 호출은 없습니다. 명시적 짧은 후속 질문은 최근 8개 메시지 안의 직전 사용자 요청 최대 4,000자를 참고합니다. 일반 감사/새 질문은 이전의 높은 추론 강도를 상속하지 않습니다.

@@ -4,11 +4,14 @@ author: owndev and olivier-lacroix. editied by goni5252
 author_url: https://github.com/owndev/
 project_url: https://github.com/owndev/Open-WebUI-Functions
 funding_url: https://github.com/sponsors/owndev
-version: 1.26.0
+version: 1.26.1
 required_open_webui_version: 0.9.0
 requirements: google-genai==3.3.0
 license: Apache License 2.0
 description: Google Gemini pipeline with Gemini 4 Hydrogen support, local Auto Thinking routing, automatic Google Search grounding, Nano Banana 2 image routing/editing, OCR, RAG bypass, and robust tool handling.
+changes_1_26_1:
+  - Add Gemini 4 Hydrogen Korean OCR alias alongside existing Flash OCR
+  - Reuse full-original PDF RAG bypass and dedicated OCR controls
 changes_1_26_0:
   - Enable local low/medium/high Auto Thinking for Gemini 4 Hydrogen
   - Cap Hydrogen xhigh at high, including saved manual settings
@@ -559,7 +562,7 @@ class Pipe:
             default=os.getenv("GOOGLE_ENABLE_OCR_VIRTUAL_MODEL", "true").lower()
             == "true",
             description=(
-                "Expose a virtual OCR-optimized model in Open WebUI. The virtual model "
+                "Expose Hydrogen Korean OCR and the configured OCR model in Open WebUI. The configured model "
                 "is mapped internally to OCR_BASE_MODEL_ID before calling Gemini."
             ),
         )
@@ -1517,6 +1520,12 @@ class Pipe:
             # Add an Open WebUI-only virtual OCR model. It is never sent to the
             # Google API directly; _prepare_model_id() maps it to OCR_BASE_MODEL_ID.
             if self.valves.ENABLE_OCR_VIRTUAL_MODEL:
+                model_map["gemini-4-hydrogen-ocr"] = {
+                    "id": "gemini-4-hydrogen-ocr",
+                    "name": "Gemini 4 Hydrogen 한글 OCR (High-Res)",
+                    "image_generation": False,
+                    "video_generation": False,
+                }
                 ocr_virtual_id = self.strip_prefix(
                     self.valves.OCR_VIRTUAL_MODEL_ID or ""
                 )
@@ -2253,6 +2262,7 @@ class Pipe:
             virtual_id,
             "gemini-3.7-flash-ocr",
             "gemini-3.8-flash-ocr",
+            "gemini-4-hydrogen-ocr",
         } and bool(requested)
 
     def _apply_ocr_system_prompt(
@@ -2310,6 +2320,9 @@ class Pipe:
             return mapped
 
         if is_ocr_alias:
+            # Dedicated Hydrogen alias must not inherit a persisted Flash base.
+            if model_id == "gemini-4-hydrogen-ocr":
+                return "gemini-4-hydrogen"
             base_model_id = self.strip_prefix(
                 (self.valves.OCR_BASE_MODEL_ID or "").strip()
             )

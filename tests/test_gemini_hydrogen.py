@@ -86,6 +86,26 @@ class HydrogenTests(unittest.TestCase):
             self.assertEqual(self.pipe._needs_conversation_images(body, session), expected, text)
 
 
+    def test_hydrogen_ocr_listing_mapping_and_controls(self):
+        client = Mock()
+        client.models.list.return_value = []
+        self.pipe._get_client = lambda: client
+        ids = [m['id'] for m in self.pipe.get_google_models(force_refresh=True)]
+        self.assertIn('gemini-4-hydrogen-ocr', ids)
+        self.assertIn('gemini-3.8-flash-ocr', ids)
+        alias = 'google_gemini.gemini-4-hydrogen-ocr'
+        self.assertTrue(self.pipe._is_ocr_virtual_model(alias))
+        self.assertEqual(self.pipe._prepare_model_id(alias), 'gemini-4-hydrogen')
+        self.assertEqual(self.pipe._prepare_model_id('gemini-3.8-flash-ocr'), 'gemini-3.8-flash')
+        cfg = self.config({'model': alias, 'reasoning_effort': 'high'})
+        self.assertEqual(cfg.thinking_config.thinking_level.value.lower(), 'low')
+        self.assertFalse(cfg.thinking_config.include_thoughts)
+        self.assertEqual(cfg.media_resolution.value, 'MEDIA_RESOLUTION_HIGH')
+        self.assertFalse(cfg.tools)
+        self.pipe.valves.ENABLE_OCR_VIRTUAL_MODEL = False
+        self.assertNotIn('gemini-4-hydrogen-ocr', [m['id'] for m in self.pipe.get_google_models(force_refresh=True)])
+
+
 
 @unittest.skipIf(types is None, "google-genai is required for SDK integration checks")
 class HydrogenPipelineTests(unittest.IsolatedAsyncioTestCase):
@@ -144,3 +164,55 @@ class HydrogenPipelineTests(unittest.IsolatedAsyncioTestCase):
             thinking = stream.call_args.kwargs['config'].thinking_config
             actual = thinking.thinking_level
             self.assertEqual(actual.value.lower() if actual else None, expected)
+
+    async def test_ocr_companion_to_original_pdf_pipeline(self):
+        import base64
+        import importlib.util
+        from pathlib import Path
+        from unittest.mock import AsyncMock, Mock, patch
+        path = Path(__file__).resolve().parents[1] / 'functions/google_gemini_rag_bypass.py'
+        spec = importlib.util.spec_from_file_location('hydrogen_bypass_test', path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        companion = module.Filter()
+        companion.valves.SHOW_STATUS = False
+        self.pipe.valves.BYPASS_BACKEND_RAG = False  # OCR must still require original PDF.
+        self.pipe.valves.AUTO_THINKING = True
+        self.pipe._select_auto_thinking_level = Mock(side_effect=AssertionError('OCR skips auto reasoning'))
+        self.pipe._prepare_content = Gemini._prepare_content.__get__(self.pipe, Gemini)
+        pdf = b'%PDF-1.4 original Korean scan bytes'
+        self.pipe._load_owui_file = AsyncMock(return_value=(pdf, SimpleNamespace()))
+        self.pipe._get_client = lambda: self.client
+        self.pipe._handle_streaming_response = lambda iterator, *a, **kw: iterator
+        metadata = {}
+        body = {'model': 'google_gemini.gemini-4-hydrogen-ocr', 'stream': True,
+                'files': [{'id': 'scan', 'type': 'file', 'name': 'scan.pdf', 'content_type': 'application/pdf'}],
+                'messages': [{'role': 'user', 'content': '한글 그대로 전사해줘 <context>partial RAG text</context>'}]}
+        body = await companion.inlet(body, __metadata__=metadata)
+        self.assertEqual(body['files'], [])
+        self.assertEqual(metadata['_google_gemini_bypassed_files'][0]['id'], 'scan')
+        stream = AsyncMock(return_value=object())
+        with patch.object(self.client.aio.models, 'generate_content_stream', stream):
+            await self.pipe.pipe(body, __metadata__=metadata)
+        stream.assert_awaited_once()
+        sent = stream.call_args.kwargs
+        self.assertEqual(sent['model'], 'gemini-4-hydrogen')
+        parts = [part for turn in sent['contents'] for part in turn['parts']]
+        inline = next(p['inline_data'] for p in parts if 'inline_data' in p)
+        self.assertEqual(base64.b64decode(inline['data']), pdf)
+        self.assertNotIn('partial RAG text', str(sent['contents']))
+        self.assertIn('초성·중성·종성', sent['config'].system_instruction)
+        self.assertEqual(sent['config'].thinking_config.thinking_level.value.lower(), 'low')
+        self.assertFalse(sent['config'].tools)
+        self.image_api.assert_not_awaited()
+
+    async def test_ocr_missing_original_does_not_send_partial_text(self):
+        from unittest.mock import AsyncMock, patch
+        self.pipe._prepare_content = Gemini._prepare_content.__get__(self.pipe, Gemini)
+        self.pipe._load_owui_file = AsyncMock(return_value=(None, SimpleNamespace(data={'content': 'partial text'})))
+        with patch.object(self.client.aio.models, 'generate_content_stream', AsyncMock()) as stream:
+            result = await self.pipe.pipe({'model': 'gemini-4-hydrogen-ocr', 'stream': True,
+                'messages': [{'role': 'user', 'content': '전사'}]}, __metadata__={
+                '_google_gemini_bypassed_files': [{'id': 'scan', 'name': 'scan.pdf', 'content_type': 'application/pdf'}]})
+        self.assertIn('OCR PDF', str(result))
+        stream.assert_not_awaited()
