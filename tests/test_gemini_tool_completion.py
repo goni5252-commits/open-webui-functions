@@ -30,7 +30,7 @@ class ToolCompletionTests(unittest.IsolatedAsyncioTestCase):
 
     def test_explicit_operations_workspace_and_opt_out_remain_available(self):
         _, tools = self.terminal()
-        for text in ('문제 검토 후 PDF 파일로 만들어줘', '문제 오류를 Python으로 검토해줘', '코드를 실행해서 검토해줘'):
+        for text in ('문제 검토 후 PDF 파일로 만들어줘', '문제 검토 후 한글파일 만들어줘', '문제 오류를 Python으로 검토해줘', '코드를 실행해서 검토해줘'):
             config = self.pipe._configure_generation(body(text), None, {}, tools, model_id='gemini-3.8-flash')
             self.assertTrue(any(callable(t) for t in config.tools or []), text)
         _, workspace = self.terminal('workspace')
@@ -39,6 +39,25 @@ class ToolCompletionTests(unittest.IsolatedAsyncioTestCase):
         self.pipe.valves.SMART_TERMINAL_SELECTION = False
         config = self.pipe._configure_generation(body('문제 오류 및 타당성 검토 부탁'), None, {}, tools, model_id='gemini-3.8-flash')
         self.assertTrue(any(callable(t) for t in config.tools or []))
+
+    async def test_search_then_direct_terminal_returns_hwpx_card(self):
+        b = body('최신 자료를 검토하고 한글 파일 만들어줘')
+        tools = {'display_file': {'direct': True, 'type': 'terminal', 'tool_id': 'terminal:one',
+            'spec': {'name': 'display_file', 'description': 'Display a generated file',
+                     'parameters': {'type': 'object', 'properties': {'path': {'type': 'string'}},
+                                    'required': ['path']}}}}
+        event_call = AsyncMock(return_value={'path': '보고서.hwpx', 'exists': True})
+        t = self.types
+        display = t.GenerateContentResponse(candidates=[t.Candidate(content=t.Content(role='model', parts=[
+            t.Part(function_call=t.FunctionCall(name='display_file', args={'path': '보고서.hwpx'}))]))])
+        http = AsyncMock(side_effect=[self.response('검색 자료'), display, self.response('완료')])
+        with patch.object(self.client.aio.models, '_generate_content', http):
+            result = await self.pipe.pipe(b, __tools__=tools, __event_call__=event_call)
+        event_call.assert_awaited_once()
+        self.assertEqual(event_call.call_args.args[0]['data']['params'], {'path': '보고서.hwpx'})
+        self.assertIn('보고서.hwpx', result['response']['output'][1]['output'][0]['text'])
+        self.assertIn('kordoc', http.call_args.kwargs['config'].system_instruction)
+        self.assertEqual(http.await_count, 3)
 
     def pending(self, name='run_command'):
         t = self.types

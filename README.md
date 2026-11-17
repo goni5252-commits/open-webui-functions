@@ -5,7 +5,7 @@ OpenWebUI에서 대화, 이미지 생성, 한글 OCR과 문서 내보내기를 �
 | 함수 | 버전 | 간단한 설명 | 다운로드 |
 |---|---|---|---|
 | OpenAI Responses | 1.9.0 | 자동 모델 선택, 이미지 생성·편집, PDF/OCR, Terminal 문서 제작 | [JSON](function-openai_responses.json) |
-| Google Gemini | 1.26.1 | Hydrogen 자동 추론·이미지 생성·한글 OCR | [JSON](function-google_gemini.json) |
+| Google Gemini | 1.26.2 | Hydrogen 자동 추론·이미지 생성·한글 OCR | [JSON](function-google_gemini.json) |
 | Gemini RAG Bypass | 1.0.1 | 백엔드 RAG 검색을 우회하고 첨부 원본을 Gemini에 전달하는 필터 | [JSON](function-google_gemini_rag_bypass.json) |
 | EXAONE Auto | 1.0.0 | K-EXAONE 2.5 텍스트 대화의 low/high/max 자동 추론 선택 | [JSON](function-exaone_auto.json) |
 | 한글 문서 내보내기 | 3.4.0 | 답변의 표·수식·이미지 등을 HWPX로 저장 | [JSON](function-한글문서_내보내기.json) |
@@ -23,6 +23,7 @@ OpenWebUI에서 대화, 이미지 생성, 한글 OCR과 문서 내보내기를 �
 
 - 일반 대화: `gemini-4-hydrogen`. `AUTO_THINKING=true`이면 요청에 따라 low/medium/high를 로컬 판단하며 xhigh는 high로 제한합니다. 대화별 추론 설정이 우선합니다.
 - 이미지 생성·편집: `ENABLE_CONVERSATION_IMAGES=true`, `CONVERSATION_IMAGE_SMART_SELECTION=true`. 요청에 맞춰 `AUTO_IMAGE_MODEL`(기본 `gemini-3.1-flash-image`)을 호출합니다. 일반 대화에서는 불필요한 이미지 도구를 제외하고 스트리밍을 유지합니다.
+- HWPX 제작: 일반 Gemini 모델에 Open Terminal을 연결하고 native 도구 호출을 사용하세요. Terminal에 설치된 kordoc으로 문서를 생성하고 확인한 뒤 파일 카드로 반환하도록 안내합니다.
 - 한글 OCR: **Gemini 4 Hydrogen 한글 OCR (High-Res)** / `gemini-4-hydrogen-ocr`. 기본 고해상도·low 추론으로 원문을 전사하며 검색·이미지 생성 도구를 제외합니다. 기존 Flash OCR과 `OCR_*` 설정을 공유합니다.
 - RAG 우회: **Gemini RAG Bypass 필터를 활성화하고 사용할 Gemini 모델에 적용**하세요. 기본 접두사는 `google_gemini`이며 함수 ID를 바꾸었다면 필터의 `MODEL_ID_PREFIXES`도 맞추세요. OCR은 원본 PDF 전달에 실패하면 일부 추출 텍스트로 대체하지 않습니다.
 - 모델 목록을 제한했다면 `MODEL_WHITELIST`에 사용할 모델 ID를 추가하세요. OCR 표시에는 `ENABLE_OCR_VIRTUAL_MODEL=true`가 필요합니다.
