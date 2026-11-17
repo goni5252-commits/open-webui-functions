@@ -80,6 +80,27 @@ class RoutingTests(unittest.IsolatedAsyncioTestCase):
             {"type": "input_text", "text": text},
             {"type": "input_image", "image_url": "data:image/png;base64,dGVzdA==", "detail": "high"}]}]
 
+    async def test_school_work_skips_classifier_and_keeps_source(self):
+        for prompt, target in (("이 자료로 학습지를 제작해줘", "gpt-6-luna"),
+                               ("생기부를 분석해서 면접 활동지를 만들어줘", "gpt-6.1-sol")):
+            source = self.image_prompt(prompt)
+            body = await self.route(prompt=source, hint={"min_target": "astra", "min_effort": "max"})
+            self.pipe.send_openai_responses_nonstreaming_request.assert_not_awaited()
+            self.assertEqual((body.model, body.reasoning["effort"]), (target, "medium"))
+            self.assertEqual(body.input, source)
+
+    async def test_bulk_material_followup_uses_luna_and_bounded_classifier_input(self):
+        source = [{"role": "user", "content": [
+            {"type": "input_text", "text": "가" * 10000},
+            {"type": "input_file", "filename": "lesson.pdf", "file_id": "id-do-not-forward"}]},
+            {"role": "user", "content": "예시를 세 개 더 넣어줘"}]
+        body = await self.route(decision(kind="bulk_material"), prompt=source)
+        self.assertEqual((body.model, body.reasoning["effort"]), ("gpt-6-luna", "medium"))
+        wire = self.pipe.send_openai_responses_nonstreaming_request.call_args.args[0]["input"]
+        self.assertNotIn("id-do-not-forward", str(wire))
+        self.assertLess(len(str(wire)), 2000)
+        self.assertEqual(body.input, source)
+
     async def test_visual_solving_overrides_simple_terra_classification(self):
         data = dict(decision("gpt-6.1-terra", "none", kind="simple"),
                     visual_content="other", visual_task="literal_extraction", visual_readability="readable")
@@ -88,19 +109,19 @@ class RoutingTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((body.model, body.reasoning["effort"]), ("gpt-6.1-sol", "medium"))
             self.assertEqual(body.model_router_result["router_image_count"], 1)
 
-    async def test_visual_math_high_and_ceiling(self):
+    async def test_visual_math_medium_and_ceiling(self):
         data = dict(decision("gpt-6.1-terra", "none", kind="simple"),
                     visual_content="math_science", visual_task="reasoning", visual_readability="readable")
         body = await self.route(data, prompt=self.image_prompt())
-        self.assertEqual((body.model, body.reasoning["effort"]), ("gpt-6.1-sol", "high"))
+        self.assertEqual((body.model, body.reasoning["effort"]), ("gpt-6.1-sol", "medium"))
         body = await self.route(data, prompt=self.image_prompt(), valves=m.Pipe.Valves(GPT6_AUTO_MAX_TARGET="luna"))
         self.assertEqual(body.model, "gpt-6.1-terra")
         data.update(target_model="gpt-6-astra", task_class="agentic_exceptional")
         body = await self.route(data, prompt=self.image_prompt())
-        self.assertEqual(body.model, "gpt-6-astra")
+        self.assertEqual(body.model, "gpt-6.1-sol")
         data.update(target_model="gpt-6.1-terra", task_class="routine", visual_content="other", visual_task="literal_extraction")
         body = await self.route(data, prompt=self.image_prompt("수학 모의고사 풀어줘"))
-        self.assertEqual((body.model, body.reasoning["effort"]), ("gpt-6.1-sol", "high"))
+        self.assertEqual((body.model, body.reasoning["effort"]), ("gpt-6.1-sol", "medium"))
 
     async def test_visual_extraction_and_uncertainty(self):
         data = dict(decision("gpt-6.1-terra", "none", kind="simple"),
@@ -139,10 +160,10 @@ class RoutingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(body.model, "gpt-6.1-sol")
         wire = self.pipe.send_openai_responses_nonstreaming_request.call_args.args[0]
         schema = wire["text"]["format"]["schema"]
-        self.assertEqual(schema["properties"]["target_model"]["enum"], ["gpt-6.1-terra", "gpt-6.1-sol", "gpt-6-astra"])
+        self.assertEqual(schema["properties"]["target_model"]["enum"], ["gpt-6-luna", "gpt-6.1-terra", "gpt-6.1-sol"])
         self.assertEqual(set(schema["required"]), set(schema["properties"]))
         self.assertIn("token_heavy", schema["properties"]["route_kind"]["enum"])
-        self.assertIn("Default to GPT-6.1 Sol", wire["instructions"])
+        self.assertIn("maximum is GPT-6.1 Sol / medium", wire["instructions"])
 
     async def test_simple_and_mechanical_work_can_use_terra(self):
         for kind in ("simple", "trivial", "mechanical_batch"):
@@ -163,11 +184,11 @@ class RoutingTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(task=task):
                 body = await self.route(decision("gpt-6-astra", "high", task))
                 self.assertEqual(body.model, "gpt-6.1-sol")
-                self.assertEqual(body.reasoning["effort"], "high" if task == "hard_reasoning" else "medium")
+                self.assertEqual(body.reasoning["effort"], "medium")
 
-    async def test_exceptional_astra_and_none_normalization(self):
+    async def test_exceptional_astra_falls_back_to_sol_medium(self):
         body = await self.route(decision("gpt-6-astra", "none", "agentic_exceptional"))
-        self.assertEqual((body.model, body.reasoning["effort"]), ("gpt-6-astra", "low"))
+        self.assertEqual((body.model, body.reasoning["effort"]), ("gpt-6.1-sol", "medium"))
 
     async def test_astra_disabled_ceiling_and_saved_terra_ceiling(self):
         for settings, target in (({"ENABLE_GPT6_ASTRA": False}, "gpt-6.1-sol"),
@@ -227,8 +248,8 @@ class RoutingTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_token_heavy_implementation_prefers_terra(self):
         for task in ("routine", "professional"):
-            for target in ("gpt-6.1-terra", "gpt-6.1-sol", "gpt-6-astra"):
-                body = await self.route(decision(target, "high", task, "token_heavy"),
+            for target in ("gpt-6-luna", "gpt-6.1-terra", "gpt-6.1-sol"):
+                body = await self.route(decision(target, "medium", task, "token_heavy"),
                                         prompt="명세대로 CRUD 코드와 테스트를 작성해줘")
                 self.assertEqual((body.model, body.reasoning["effort"]), ("gpt-6.1-terra", "medium"))
                 self.assertEqual(body.model_router_result["target_tier"], "terra")
@@ -241,14 +262,14 @@ class RoutingTests(unittest.IsolatedAsyncioTestCase):
         data = dict(decision("gpt-6.1-terra", "low", "professional", "token_heavy"),
                     visual_content="math_science", visual_task="reasoning", visual_readability="readable")
         body = await self.route(data, prompt=self.image_prompt("수학 문제 풀어줘"))
-        self.assertEqual((body.model, body.reasoning["effort"]), ("gpt-6.1-sol", "high"))
+        self.assertEqual((body.model, body.reasoning["effort"]), ("gpt-6.1-sol", "medium"))
         body = await self.route(decision("gpt-6.1-terra", kind="token_heavy"), hint={"min_target": "terra"})
         self.assertEqual(body.model, "gpt-6.1-sol")
 
-    async def test_old_luna_result_rejected_and_classifier_unchanged(self):
+    async def test_luna_can_handle_simple_requests(self):
         body = await self.route(decision("gpt-6-luna", kind="simple"))
-        self.assertEqual(body.model, "gpt-6.1-sol")
-        self.assertTrue(body.model_router_result["fallback"])
+        self.assertEqual(body.model, "gpt-6-luna")
+        self.assertFalse(body.model_router_result["fallback"])
         wire = self.pipe.send_openai_responses_nonstreaming_request.call_args.args[0]
         self.assertEqual(wire["model"], "gpt-6-luna")
 
@@ -491,13 +512,13 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
 
 class PipeIntegrationTests(unittest.IsolatedAsyncioTestCase):
     """Exercise the actual WebUI conversion/routing/tool-construction sequence."""
-    async def run_pipe(self, model, stream=True, settings=None, effort=None, prefix="openai_responses", metadata_id=None, route_decision=None):
+    async def run_pipe(self, model, stream=True, settings=None, effort=None, prefix="openai_responses", metadata_id=None, route_decision=None, prompt="Explain this algorithm"):
         pipe = m.Pipe()
         pipe.valves = m.Pipe.Valves(**(settings or {}))
         pipe.send_openai_responses_nonstreaming_request = AsyncMock(return_value=completed(json.dumps(route_decision or decision())))
         pipe._run_streaming_loop = AsyncMock(return_value="stream result")
         pipe._run_nonstreaming_loop = AsyncMock(return_value="nonstream result")
-        body = {"model": prefix + "." + model, "messages": [{"role": "user", "content": "Explain this algorithm"}],
+        body = {"model": prefix + "." + model, "messages": [{"role": "user", "content": prompt}],
                 "stream": stream, "tool_choice": "auto", "temperature": 0.7}
         if effort:
             body["reasoning_effort"] = effort
@@ -506,6 +527,13 @@ class PipeIntegrationTests(unittest.IsolatedAsyncioTestCase):
                                        {"echo": {"spec": {"name": "echo", "parameters": {"type": "object", "properties": {}}}}})
         call = pipe._run_streaming_loop if stream else pipe._run_nonstreaming_loop
         return pipe, result, call.call_args.args[0]
+
+    async def test_school_routes_reach_generation_without_classifier(self):
+        for stream in (True, False):
+            for prompt, target in (("학습지 제작", "gpt-6-luna"), ("생기부 분석", "gpt-6.1-sol")):
+                pipe, _, body = await self.run_pipe("gpt-6-auto", stream, effort="high", prompt=prompt)
+                pipe.send_openai_responses_nonstreaming_request.assert_not_awaited()
+                self.assertEqual((body.model, body.reasoning["effort"]), (target, "medium"))
 
     async def test_token_heavy_terra_keeps_tools_in_both_ui_paths(self):
         for stream in (True, False):
