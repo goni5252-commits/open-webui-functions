@@ -8,6 +8,35 @@ from test_conversation_images import Gemini
 
 
 class GeminiTerminalTests(unittest.IsolatedAsyncioTestCase):
+    async def test_old_and_new_processor_signatures_for_nonterminal_embeds(self):
+        ns = Gemini.pipe.__globals__
+        for legacy in (True, False):
+            seen = []
+            async def current(request, name, result, tool_type, metadata=None, user=None):
+                seen.append((metadata, user))
+                return 'visible', [], ['<svg/>']
+            async def old(request, name, result, tool_type, direct_tool=False, metadata=None, user=None):
+                self.assertTrue(direct_tool)
+                return await current(request, name, result, tool_type, metadata, user)
+            bridge = ns['_TerminalBridge'](AsyncMock(), {'__metadata__': {'chat_id': 'c'},
+                '__user__': {'id': 'u'}, '__event_call__': AsyncMock(return_value='html')})
+            with patch.dict(ns, {'_terminal_helper': lambda mod, name:
+                                (old if legacy else current) if name == 'process_tool_result' else None}):
+                result = await bridge.execute({'name': 'chart', 'arguments': '{}', 'call_id': 'c1'},
+                                             {'type': 'external', 'direct': True})
+            self.assertEqual(result, 'visible')
+            self.assertEqual(seen, [({'chat_id': 'c'}, {'id': 'u'})])
+            self.assertEqual(bridge.output[1]['embeds'], ['<svg/>'])
+
+    async def test_visualization_validation_error_stays_rejected(self):
+        ns = Gemini.pipe.__globals__
+        bridge = ns['_TerminalBridge'](AsyncMock(), {})
+        with patch.dict(ns, {'_terminal_helper': lambda *a: None}):
+            result = await bridge.execute({'name': 'render_visualization', 'arguments': '{}', 'call_id': 'c'},
+                {'type': 'builtin', 'callable': AsyncMock(return_value={'error': 'invalid html'})})
+        self.assertEqual(json.loads(result), {'error': 'invalid html'})
+        self.assertNotIn('accepted', bridge.output[1]['output'][0]['text'])
+
     async def run_pipe(self, stream=False, exists=True, terminal=True, fail_final=False):
         pipe = object.__new__(Gemini)
         events = []

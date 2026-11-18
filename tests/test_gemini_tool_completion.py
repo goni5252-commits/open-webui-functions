@@ -1,5 +1,6 @@
 """Visual review selection and AFC exhaustion with real SDK, no external calls."""
 import unittest
+import json
 from unittest.mock import AsyncMock, patch
 import test_conversation_images as helpers
 from test_gemini_latency import body
@@ -9,6 +10,50 @@ class ToolCompletionTests(unittest.IsolatedAsyncioTestCase):
     setUp = helpers.GeminiFullPipelineTests.setUp
     asyncTearDown = helpers.GeminiFullPipelineTests.asyncTearDown
     response = helpers.GeminiFullPipelineTests.response
+
+    async def test_visualization_sdk_call_survives_both_final_response_modes(self):
+        self.pipe.valves.ENABLE_CONVERSATION_IMAGES = False
+        self.pipe.valves.AUTO_GOOGLE_SEARCH = False
+        self.pipe._get_client = lambda: self.client
+        args = {'title': '세계 도시', 'html': '<svg><text>도시 인구</text></svg>', 'libraries': ['chartjs']}
+        render = AsyncMock(return_value={'status': 'accepted'})
+        tools = {'render_visualization': {'type': 'builtin', 'tool_id': 'builtin:render_visualization',
+            'callable': render, 'spec': {'name': 'render_visualization', 'description': 'Render a visualization',
+            'parameters': {'type': 'object', 'properties': {
+                'title': {'type': 'string'}, 'html': {'type': 'string'},
+                'libraries': {'type': 'array', 'items': {'type': 'string', 'enum': ['chartjs']}}},
+                'required': ['title', 'html']}}}}
+        t = self.types
+        response = t.GenerateContentResponse(candidates=[t.Candidate(content=t.Content(role='model', parts=[
+            t.Part(function_call=t.FunctionCall(name='render_visualization', args=args),
+                   thought_signature=b'visualization-signature')]))])
+        for stream in (True, False):
+            with self.subTest(stream=stream):
+                render.reset_mock()
+                http = AsyncMock(side_effect=[response, self.response('도시 인구 그래프입니다.')])
+                emitter = AsyncMock()
+                with patch.object(self.client.aio.models, '_generate_content', http), patch.dict(
+                        helpers.Gemini.pipe.__globals__, {'_terminal_helper': lambda *a: None}):
+                    result = await self.pipe.pipe(
+                        {'model': 'gemini-4-hydrogen', 'stream': stream,
+                         'messages': [{'role': 'user', 'content': '세계 10대 도시를 시각화해줘'}]},
+                        __tools__=tools, __event_emitter__=emitter)
+                render.assert_awaited_once_with(**args)
+                self.assertEqual(http.await_count, 2)
+                payload = result['response'] if stream else result
+                output = payload['output']
+                self.assertEqual(json.loads(output[0]['arguments']), args)
+                self.assertEqual(output[0]['name'], 'render_visualization')
+                self.assertEqual(output[0]['call_id'], output[1]['call_id'])
+                self.assertEqual(output[1]['status'], 'completed')
+                self.assertEqual(json.loads(output[1]['output'][0]['text']), {'status': 'accepted'})
+                self.assertIn('도시 인구 그래프입니다.', output[-1]['content'][0]['text'])
+                self.assertTrue(any(c.args[0].get('data', {}).get('output') for c in emitter.call_args_list))
+                contents = http.call_args.kwargs['contents']
+                responses = [p.function_response.response for c in contents for p in c.parts
+                             if p.function_response]
+                self.assertEqual(json.loads(responses[-1]['result']), {'status': 'accepted'})
+                self.assertNotIn('_terminal_bridge', tools['render_visualization'])
 
     def terminal(self, kind='terminal'):
         call = AsyncMock(return_value={'stdout': 'verified'})

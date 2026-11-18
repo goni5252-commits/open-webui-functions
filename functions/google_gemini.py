@@ -4,7 +4,7 @@ author: owndev and olivier-lacroix. editied by goni5252
 author_url: https://github.com/owndev/
 project_url: https://github.com/owndev/Open-WebUI-Functions
 funding_url: https://github.com/sponsors/owndev
-version: 1.26.2
+version: 1.26.3
 required_open_webui_version: 0.9.0
 requirements: google-genai==3.3.0
 license: Apache License 2.0
@@ -6130,7 +6130,7 @@ class Pipe:
             metadata["task"] = __task__
         bridge = None
         if not metadata.get("task") and any(
-            isinstance(tool, dict) and _is_terminal_tool(tool)
+            isinstance(tool, dict)
             for tool in (__tools__ or {}).values()
         ):
             bridge = _TerminalBridge(__event_emitter__, {
@@ -6139,7 +6139,7 @@ class Pipe:
             })
             __tools__ = {
                 name: {**tool, "_terminal_bridge": bridge}
-                if isinstance(tool, dict) and _is_terminal_tool(tool) else tool
+                if isinstance(tool, dict) else tool
                 for name, tool in __tools__.items()
             }
             __event_emitter__ = bridge.emit
@@ -7385,7 +7385,7 @@ def _terminal_helper(module, name):
 
 
 class _TerminalBridge:
-    """Request-local adapter for OWUI 0.11.4's structured output renderer."""
+    """Request-local renderer bridge for Terminal and ordinary tool embeds."""
     def __init__(self, emitter, context):
         self.emitter = emitter
         self.context = {**context, "__event_emitter__": self.emit}
@@ -7443,6 +7443,7 @@ class _TerminalBridge:
         import copy
         from uuid import uuid4
         name = call["name"]
+        terminal_tool = _is_terminal_tool(tool)
         args = json.loads(call["arguments"])
         if not isinstance(args, dict):
             raise ValueError("Terminal tool arguments must be a JSON object")
@@ -7467,7 +7468,7 @@ class _TerminalBridge:
                     # Only helper setup is retried; never execute a tool twice.
                     fn = tool["callable"]
             params = dict(args)
-            if name == "display_file":
+            if terminal_tool and name == "display_file":
                 params.pop("inline", None)
                 params.pop("page", None)
             if inspect.iscoroutinefunction(fn):
@@ -7497,7 +7498,7 @@ class _TerminalBridge:
         )
         structured = None
         builder = _terminal_helper(middleware, "build_terminal_file_tool_result")
-        if name == "display_file" and isinstance(raw, dict) and not failed:
+        if terminal_tool and name == "display_file" and isinstance(raw, dict) and not failed:
             if builder:
                 try:
                     structured = builder(name, args, copy.deepcopy(raw), tool, metadata)
@@ -7529,17 +7530,25 @@ class _TerminalBridge:
         processor = _terminal_helper(middleware, "process_tool_result")
         if processor:
             try:
+                # 0.13.4 omits the older direct_tool argument. Inspect before
+                # calling so processor side effects are never retried.
+                processor_kwargs = {"metadata": metadata, "user": self.context.get("__user__")}
+                if "direct_tool" in inspect.signature(processor).parameters:
+                    processor_kwargs["direct_tool"] = direct
                 processed, files, embeds = await processor(
                     self.context.get("__request__"), name, copy.deepcopy(processed),
-                    tool.get("type", "terminal"), direct, metadata, self.context.get("__user__"),
+                    tool.get("type", "terminal" if terminal_tool else ""), **processor_kwargs,
                 )
             except Exception:
                 processed = structured if structured is not None else raw
         else:
             processed = structured if structured is not None else raw
         text = processed if isinstance(processed, str) else json.dumps(processed, ensure_ascii=False, default=str)
-        # UI metadata belongs only in the UI output, never the OpenAI request.
-        if structured is not None or files or embeds:
+        # The visualization renderer reads HTML from the call arguments and
+        # enables execution only for a completed {"status": "accepted"} result.
+        # Keep the renderer output separate from the SDK's function response.
+        visualization = name == "render_visualization" and tool.get("type") == "builtin"
+        if structured is not None or files or embeds or visualization:
             self.output.extend([
                 {"type": "function_call", "id": call.get("id", call["call_id"]),
                  "call_id": call["call_id"], "name": name, "arguments": call["arguments"], "status": "completed"},
@@ -7555,7 +7564,7 @@ class _TerminalBridge:
         )
         if name == "display_file" and not isinstance(raw, dict):
             event_ok = False
-        if event_ok:
+        if terminal_tool and event_ok:
             if handler:
                 try:
                     await handler(name, args, text, self.emit)
