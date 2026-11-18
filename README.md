@@ -4,7 +4,7 @@ OpenWebUI에서 대화, 이미지 생성, 한글 OCR과 문서 내보내기를 �
 
 | 함수 | 버전 | 간단한 설명 | 다운로드 |
 |---|---|---|---|
-| OpenAI Responses | 1.9.0 | 자동 모델 선택, 이미지 생성·편집, PDF/OCR, Terminal 문서 제작 | [JSON](function-openai_responses.json) |
+| OpenAI Responses | 1.9.1 | 자동 모델 선택, 이미지 생성·편집, PDF/OCR, Terminal 문서 제작 | [JSON](function-openai_responses.json) |
 | Google Gemini | 1.26.2 | Hydrogen 자동 추론·이미지 생성·한글 OCR | [JSON](function-google_gemini.json) |
 | Gemini RAG Bypass | 1.0.1 | 백엔드 RAG 검색을 우회하고 첨부 원본을 Gemini에 전달하는 필터 | [JSON](function-google_gemini_rag_bypass.json) |
 | EXAONE Auto | 1.0.0 | K-EXAONE 2.5 텍스트 대화의 low/high/max 자동 추론 선택 | [JSON](function-exaone_auto.json) |
@@ -32,6 +32,7 @@ OpenWebUI에서 대화, 이미지 생성, 한글 OCR과 문서 내보내기를 �
 
 ## OpenAI · EXAONE
 
+- OpenAI는 대화 기록의 `content: null` 메시지를 빈 내용으로 처리하며, 요청 실패 시 서버 로그에 traceback을 남깁니다.
 - OpenAI의 `gpt-6-auto`는 학습지·반복 자료 제작에 Luna/medium을 사용하고, 생기부 분석 등 근거 중심 작업에는 최대 GPT-6.1 Sol/medium을 사용합니다. 명확한 학습지 제작·생기부 요청은 별도 분류 API 호출을 생략합니다. 이미지 생성, `gpt-6-ocr`, Terminal 파일 도구를 지원합니다.
 - 일반 PDF는 기본 50페이지 미만이면 원본 전달, 이상이면 Mistral OCR을 사용합니다. 긴 PDF에는 `PDF_MISTRAL_API_KEY` 또는 서버 환경변수의 키가 필요합니다. `PDF_MISTRAL_PAGE_THRESHOLD=0`이면 원본 전달을 사용합니다. 해당 모델의 File Upload를 켜고 File Context를 꺼 중복 RAG 주입을 방지하세요.
 - EXAONE Auto는 텍스트 전용이며 자동 모드에서 분류와 답변 API를 각각 호출합니다. 첨부·도구·이미지는 지원하지 않습니다.

@@ -5,7 +5,7 @@ author: originally written by jrkropp, editted by woogon kim
 git_url: https://github.com/jrkropp/open-webui-developer-toolkit/blob/main/functions/pipes/openai_responses_manifold/openai_responses_manifold.py
 description: OpenAI Responses 기반 대화, 자동 모델 선택, 이미지·PDF·OCR 및 Terminal 문서 제작을 지원합니다.
 required_open_webui_version: 0.11.0
-version: 1.9.0
+version: 1.9.1
 license: MIT
 """
 
@@ -534,7 +534,9 @@ class ResponsesBody(BaseModel):
         openai_input: list[dict] = []
         for msg in messages:
             role = msg.get("role")
-            raw_content = msg.get("content", "")
+            # WebUI history may contain an unfinished assistant with content=null.
+            # Treat it like missing content before inspecting persisted markers.
+            raw_content = msg.get("content") or ""
             # Skip system messages; they will be mapped to `instructions` separately later in from_completions()
             if role == "system":
                 continue
@@ -1344,6 +1346,7 @@ class Pipe:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            self.logger.exception("OpenAI Responses request processing failed")
             if isinstance(exc, asyncio.TimeoutError):
                 detail = f"요청 대기 시간이 {self.valves.REQUEST_TIMEOUT_SECONDS}초를 초과했습니다. 서버 로그와 연결 상태를 확인해 주세요."
             else:
