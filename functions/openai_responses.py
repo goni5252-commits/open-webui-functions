@@ -5,7 +5,7 @@ author: originally written by jrkropp, editted by woogon kim
 git_url: https://github.com/jrkropp/open-webui-developer-toolkit/blob/main/functions/pipes/openai_responses_manifold/openai_responses_manifold.py
 description: OpenAI Responses 기반 대화, 자동 모델 선택, 이미지·PDF·OCR 및 Terminal 문서 제작을 지원합니다.
 required_open_webui_version: 0.11.0
-version: 1.9.1
+version: 1.9.2
 license: MIT
 """
 
@@ -1297,7 +1297,7 @@ class Pipe:
             # Resolve under wait_for: startup timeout/heartbeat still cover tool loading.
             resolved = await __tools__ if inspect.isawaitable(__tools__) else __tools__
             registry = _normalize_owui_tool_registry(resolved)
-            if not __task__ and any(_is_terminal_tool(tool) for tool in registry.values()):
+            if not __task__ and registry:
                 bridge = _TerminalBridge(emitter, {
                     "__request__": __request__, "__user__": __user__,
                     "__metadata__": __metadata__, "__event_call__": __event_call__,
@@ -1306,7 +1306,7 @@ class Pipe:
                 })
                 emitter = bridge.emit
                 resolved = {
-                    name: {**tool, "_terminal_bridge": bridge} if _is_terminal_tool(tool) else tool
+                    name: {**tool, "_terminal_bridge": bridge}
                     for name, tool in registry.items()
                 }
             if not __task__ and self.valves.ENABLE_TERMINAL_ATTACHMENT_TRANSFER:
@@ -3690,7 +3690,7 @@ class Pipe:
             tool_cfg = tools.get(call["name"])
             if not tool_cfg:
                 return asyncio.sleep(0, result="Tool not found")
-            if _is_terminal_tool(tool_cfg) and tool_cfg.get("_terminal_bridge"):
+            if tool_cfg.get("_terminal_bridge"):
                 return tool_cfg["_terminal_bridge"].execute(call, tool_cfg)
             fn = tool_cfg["callable"]
             args = json.loads(call["arguments"])
@@ -5243,7 +5243,8 @@ def create_marker(
     base = f"openai_responses:v2:{item_type}:{ulid or generate_item_id()}"
     return f"{base}?{_qs(meta)}" if meta else base
 def wrap_marker(marker: str) -> str:
-    return f"\n[{marker}]: #\n"
+    # Markdown reference definitions must start a separate paragraph.
+    return f"\n\n[{marker}]: #\n\n"
 def contains_marker(text: str) -> bool:
     return _SENTINEL in text
 def parse_marker(marker: str) -> dict:
@@ -5578,7 +5579,7 @@ def _terminal_helper(module, name):
 
 
 class _TerminalBridge:
-    """Request-local adapter for OWUI 0.11.4's structured output renderer."""
+    """Request-local renderer bridge for Terminal and ordinary tool embeds."""
     def __init__(self, emitter, context):
         self.emitter = emitter
         self.context = {**context, "__event_emitter__": self.emit}
@@ -5636,6 +5637,7 @@ class _TerminalBridge:
         import copy
         from uuid import uuid4
         name = call["name"]
+        terminal_tool = _is_terminal_tool(tool)
         args = json.loads(call["arguments"])
         if not isinstance(args, dict):
             raise ValueError("Terminal tool arguments must be a JSON object")
@@ -5660,7 +5662,7 @@ class _TerminalBridge:
                     # Only helper setup is retried; never execute a tool twice.
                     fn = tool["callable"]
             params = dict(args)
-            if name == "display_file":
+            if terminal_tool and name == "display_file":
                 params.pop("inline", None)
                 params.pop("page", None)
             if inspect.iscoroutinefunction(fn):
@@ -5690,7 +5692,7 @@ class _TerminalBridge:
         )
         structured = None
         builder = _terminal_helper(middleware, "build_terminal_file_tool_result")
-        if name == "display_file" and isinstance(raw, dict) and not failed:
+        if terminal_tool and name == "display_file" and isinstance(raw, dict) and not failed:
             if builder:
                 try:
                     structured = builder(name, args, copy.deepcopy(raw), tool, metadata)
@@ -5722,9 +5724,14 @@ class _TerminalBridge:
         processor = _terminal_helper(middleware, "process_tool_result")
         if processor:
             try:
+                # 0.13 removed the positional `direct` argument. Inspect first;
+                # retrying after TypeError could duplicate processor side effects.
+                processor_kwargs = {"metadata": metadata, "user": self.context.get("__user__")}
+                if "direct_tool" in inspect.signature(processor).parameters:
+                    processor_kwargs["direct_tool"] = direct
                 processed, files, embeds = await processor(
                     self.context.get("__request__"), name, copy.deepcopy(processed),
-                    tool.get("type", "terminal"), direct, metadata, self.context.get("__user__"),
+                    tool.get("type", "terminal" if terminal_tool else ""), **processor_kwargs,
                 )
             except Exception:
                 processed = structured if structured is not None else raw
@@ -5732,7 +5739,8 @@ class _TerminalBridge:
             processed = structured if structured is not None else raw
         text = processed if isinstance(processed, str) else json.dumps(processed, ensure_ascii=False, default=str)
         # UI metadata belongs only in the UI output, never the OpenAI request.
-        if structured is not None or files or embeds:
+        visualization = name == "render_visualization" and tool.get("type") == "builtin"
+        if structured is not None or files or embeds or visualization:
             self.output.extend([
                 {"type": "function_call", "id": call.get("id", call["call_id"]),
                  "call_id": call["call_id"], "name": name, "arguments": call["arguments"], "status": "completed"},
@@ -5748,7 +5756,7 @@ class _TerminalBridge:
         )
         if name == "display_file" and not isinstance(raw, dict):
             event_ok = False
-        if event_ok:
+        if terminal_tool and event_ok:
             if handler:
                 try:
                     await handler(name, args, text, self.emit)
