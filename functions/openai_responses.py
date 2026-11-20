@@ -5,7 +5,7 @@ author: originally written by jrkropp, editted by woogon kim
 git_url: https://github.com/jrkropp/open-webui-developer-toolkit/blob/main/functions/pipes/openai_responses_manifold/openai_responses_manifold.py
 description: OpenAI Responses 기반 대화, 자동 모델 선택, 이미지·PDF·OCR 및 Terminal 문서 제작을 지원합니다.
 required_open_webui_version: 0.11.0
-version: 1.9.2
+version: 1.9.3
 license: MIT
 """
 
@@ -114,6 +114,7 @@ class ModelFamily:
         "gpt-6-astra":         {"features": {"function_calling","reasoning","reasoning_summary","web_search_tool","web_search_default","image_gen_tool","verbosity","computer_use","tool_search"}},
         "gpt-6-sol":         {"features": {"function_calling","reasoning","reasoning_summary","web_search_tool","web_search_default","image_gen_tool","verbosity","computer_use","tool_search"}},
         "gpt-6.1-sol":         {"features": {"function_calling","reasoning","reasoning_summary","web_search_tool","web_search_default","image_gen_tool","verbosity","computer_use","tool_search"}},
+        "gpt-6.2-sol":         {"features": {"function_calling","reasoning","reasoning_summary","web_search_tool","web_search_default","image_gen_tool","verbosity","computer_use","tool_search"}},
         "gpt-6.1-terra":         {"features": {"function_calling","reasoning","reasoning_summary","web_search_tool","web_search_default","image_gen_tool","verbosity","computer_use","tool_search"}},
         "gpt-6-luna":         {"features": {"function_calling","reasoning","reasoning_summary","web_search_tool","web_search_default","image_gen_tool","verbosity","computer_use","tool_search"}},
         # ── GPT-5.6 family (released 2026-07-09; latest frontier) ────────
@@ -177,7 +178,8 @@ class ModelFamily:
         "gpt-6.1-sol-auto":                {"base_model": "gpt-6.1-sol", "params": {"_auto_reasoning": True}},
         "gpt-6-luna-auto":               {"base_model": "gpt-6-luna", "params": {"_auto_reasoning": True}},
         # Sol is a validation placeholder until the smart router selects a target.
-        "gpt-6-auto":                    {"base_model": "gpt-6.1-sol", "params": {"_auto_model_route": True}},
+        "gpt-6-auto":                    {"base_model": "gpt-6.2-sol", "params": {"_auto_model_route": True}},
+        "gpt-6.2-auto":                    {"base_model": "gpt-6.2-sol", "params": {"_auto_model_route": True}},
         # ── GPT-5.6 (v1.3.0) ─────────────────────────────────────────────
         # The bare 'gpt-5.6' id is an official OpenAI API alias that routes
         # to gpt-5.6-sol; mirrored here so either form works in WebUI.
@@ -266,15 +268,15 @@ class ModelFamily:
         return bool(cls._ALIASES.get(key, {}).get("params", {}).get("_auto_reasoning"))
     @classmethod
     def is_auto_model_routing(cls, model_id: str) -> bool:
-        """True for generic smart model+effort pseudo-models (5.6-auto / 6-auto)."""
+        """True for generic smart model+effort pseudo-models (5.6-auto / 6.2-auto)."""
         key = cls._norm(model_id)
         return bool(cls._ALIASES.get(key, {}).get("params", {}).get("_auto_model_route"))
     @classmethod
     def reasoning_efforts(cls, model_id: str) -> tuple[str, ...]:
         """Return the supported reasoning-effort ladder for known auto-routed models."""
         base = cls.base_model(model_id)
-        if base in {"gpt-6-astra", "gpt-6.1-sol"}:
-            # Astra and GPT-6.1 Sol do not support `none`.
+        if base in {"gpt-6-astra", "gpt-6.1-sol", "gpt-6.2-sol"}:
+            # Astra and GPT-6.1/6.2 Sol do not support `none`.
             return ("low", "medium", "high", "xhigh", "max")
         if base in {"gpt-6.1-terra", "gpt-6-luna", "gpt-6-sol", "gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol"}:
             return ("none", "low", "medium", "high", "xhigh", "max")
@@ -740,14 +742,14 @@ class Pipe:
         )
         # Models
         MODEL_ID: str = Field(
-            default="gpt-6.1-sol, gpt-6.1-sol-auto, gpt-6-auto, gpt-6-sol, gpt-6-luna, gpt-6-sol-auto, gpt-6-luna-auto, gpt-6-astra-auto, gpt-6-astra, gpt-6-ocr, gpt-5.6-sol-auto, gpt-5.6-terra-auto, gpt-5.6-luna-auto, gpt-5.6-auto, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-5.4, gpt-5.4-thinking, gpt-5.4-mini, gpt-5.4-nano, gpt-5.3-chat-latest, gpt-5-mini, gpt-image-2.5-flare, gpt-image-2.5-sunburst, gpt-image-2",
+            default="gpt-6.1-sol, gpt-6.1-sol-auto, gpt-6.2-auto, gpt-6-sol, gpt-6-luna, gpt-6-sol-auto, gpt-6-luna-auto, gpt-6-astra-auto, gpt-6-astra, gpt-6-ocr, gpt-5.6-sol-auto, gpt-5.6-terra-auto, gpt-5.6-luna-auto, gpt-5.6-auto, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-5.4, gpt-5.4-thinking, gpt-5.4-mini, gpt-5.4-nano, gpt-5.3-chat-latest, gpt-5-mini, gpt-image-2.5-flare, gpt-image-2.5-sunburst, gpt-image-2",
             description=(
                 "쉼표로 구분한 OpenAI 모델 ID 목록입니다. 각 ID가 WebUI의 모델 항목으로 표시됩니다. 공식 OpenAI 모델 ID와 이 함수의 가상 모델 ID를 지원합니다.\n"
                 "사용 가능한 기본 텍스트 모델: gpt-6.1-sol, gpt-6-sol, gpt-6-luna, gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna(2026-07-09 출시, gpt-5.6 별칭은 Sol로 연결), gpt-5.5, gpt-5.4, gpt-5.4-pro, gpt-5.4-mini, gpt-5.4-nano, gpt-5.3, gpt-5.3-chat-latest, gpt-5.2, gpt-5.2-chat-latest, gpt-5, gpt-5-mini, gpt-5-nano, gpt-5-chat-latest.\n"
                 "참고(v1.3.2): 모든 GPT-6 및 GPT-5.6 모델에는 아래 ENABLE_WEB_SEARCH_TOOL 설정과 관계없이 OpenAI web_search가 기본으로 연결됩니다. 날짜·날씨·뉴스 질문에 근거를 확인한 답변을 제공하기 위한 기능입니다.\n"
                 "이미지 전용 모델: gpt-image-2.5-flare, gpt-image-2.5-sunburst, gpt-image-2, gpt-image-1.5. 선택 시 /images/generations로 직접 요청하며, 이미지가 첨부되면 /images/edits를 사용합니다. 이미지 품질과 크기는 대화 화면의 밸브 버튼(v1.2.7 이상)에서 사용자별로, 아래 IMAGE_QUALITY / IMAGE_SIZE에서 관리자 기본값으로 설정할 수 있습니다.\n"
                 "OCR 모델: gpt-6-ocr는 이미지·파일 원본을 Luna에 우선 전달하고, RAG 메시지를 우회하며, PDF를 묶음 처리합니다. 실패 시 GPT-6 Sol로 재시도합니다. OCR 모드에서는 외부 도구와 웹 검색을 사용하지 않습니다.\n"
-                "자동 모델: gpt-6-auto는 학습지·반복 자료 제작에 Luna/medium을 사용하며 분석 작업의 상한은 GPT-6.1 Sol/medium입니다. gpt-6-sol-auto, gpt-6-luna-auto, gpt-6-astra-auto는 모델을 고정하고 추론 강도만 자동 선택합니다. gpt-5.6-auto는 기존 비용 제어를 유지하기 위해 Luna/Terra/Sol만 선택합니다. gpt-5.6-sol-auto, gpt-5.6-terra-auto, gpt-5.6-luna-auto도 기본 모델을 고정하고 추론 강도만 자동 선택합니다. 모든 라우터는 최신 텍스트·이미지·파일 입력을 확인합니다. gpt-5.4 추론 별칭도 계속 사용할 수 있습니다.\n"
+                "자동 모델: gpt-6.2-auto는 학습지·반복 자료 제작에 Luna/medium을 사용하며 분석 작업의 상한은 GPT-6.2 Sol/medium입니다. gpt-6-sol-auto, gpt-6-luna-auto, gpt-6-astra-auto는 모델을 고정하고 추론 강도만 자동 선택합니다. gpt-5.6-auto는 기존 비용 제어를 유지하기 위해 Luna/Terra/Sol만 선택합니다. gpt-5.6-sol-auto, gpt-5.6-terra-auto, gpt-5.6-luna-auto도 기본 모델을 고정하고 추론 강도만 자동 선택합니다. 모든 라우터는 최신 텍스트·이미지·파일 입력을 확인합니다. gpt-5.4 추론 별칭도 계속 사용할 수 있습니다.\n"
                 "기존 o-series 및 gpt-4 모델은 제거되었습니다."
             ),
         )
@@ -781,7 +783,7 @@ class Pipe:
         ENABLE_GPT6_ASTRA: bool = Field(
             default=True,
             description=(
-                "GPT-6 Astra의 표시 및 사용 여부를 설정합니다. 꺼도 gpt-6-auto는 계속 사용할 수 있습니다. API 키에 접근 권한이 없으면 Astra 직접 호출 시 OpenAI에서 model_not_found 또는 권한 오류가 발생할 수 있습니다."
+                "GPT-6 Astra의 표시 및 사용 여부를 설정합니다. 꺼도 gpt-6.2-auto는 계속 사용할 수 있습니다. API 키에 접근 권한이 없으면 Astra 직접 호출 시 OpenAI에서 model_not_found 또는 권한 오류가 발생할 수 있습니다."
             ),
         )
         ENABLE_GPT61_SOL_MODEL: bool = Field(
@@ -812,11 +814,11 @@ class Pipe:
         )
         ENABLE_GPT6_SOL_LUNA_MODELS: bool = Field(
             default=True,
-            description="저장된 MODEL_ID 목록이 있어도 GPT-6 Sol/Luna와 모델 고정 자동 추론 별칭을 표시합니다. 표시 여부만 제어하며, gpt-6-auto 라우팅은 계속 사용할 수 있습니다.",
+            description="저장된 MODEL_ID 목록이 있어도 GPT-6 Sol/Luna와 모델 고정 자동 추론 별칭을 표시합니다. 표시 여부만 제어하며, gpt-6.2-auto 라우팅은 계속 사용할 수 있습니다.",
         )
         GPT6_AUTO_POLICY: Literal["sol_first"] = Field(
             default="sol_first",
-            description="GPT-6.1 Sol/medium을 상한으로 사용합니다. 학습지와 반복 자료 제작은 Luna/medium, 생기부 분석은 Sol/medium을 사용합니다. 이전 정책 설정은 자동으로 이전됩니다.",
+            description="GPT-6.2 Sol/medium을 상한으로 사용합니다. 학습지와 반복 자료 제작은 Luna/medium, 생기부 분석은 Sol/medium을 사용합니다. 이전 정책 설정은 자동으로 이전됩니다.",
         )
         @model_validator(mode="before")
         @classmethod
@@ -849,11 +851,11 @@ class Pipe:
         )
         GPT6_AUTO_MAX_TARGET: Literal["terra", "sol"] = Field(
             default="sol",
-            description="GPT-6 자동 라우팅에서 선택할 수 있는 최대 모델 등급입니다. sol은 GPT-6.1 Sol을 뜻하며 Astra 사용을 막습니다. 저장된 luna 상한은 terra로 이전됩니다.",
+            description="GPT-6 자동 라우팅에서 선택할 수 있는 최대 모델 등급입니다. sol은 GPT-6.2 Sol을 뜻하며 Astra 사용을 막습니다. 저장된 luna 상한은 terra로 이전됩니다.",
         )
         GPT6_AUTO_FALLBACK_TARGET: Literal["terra", "sol"] = Field(
             default="sol",
-            description="라우터 실패 시 사용할 모델입니다(sol = GPT-6.1 Sol). 모델 등급 상한이 적용됩니다. 라우팅 실패만을 이유로 Astra를 사용하지 않습니다.",
+            description="라우터 실패 시 사용할 모델입니다(sol = GPT-6.2 Sol). 모델 등급 상한이 적용됩니다. 라우팅 실패만을 이유로 Astra를 사용하지 않습니다.",
         )
         GPT6_AUTO_FALLBACK_EFFORT: Literal["none", "low", "medium", "high", "xhigh", "max"] = Field(
             default="medium",
@@ -1236,6 +1238,11 @@ class Pipe:
         self.logger = SessionLogger.get_logger(__name__)
     async def pipes(self):
         model_ids = [model_id.strip() for model_id in self.valves.MODEL_ID.split(",") if model_id.strip()]
+        # Migrate saved picker entries while keeping the old alias callable for existing chats.
+        model_ids = list(dict.fromkeys(
+            "gpt-6.2-auto" if ModelFamily._norm(model_id) in {"gpt-6-auto", "gpt-6.2-auto"} else model_id
+            for model_id in model_ids
+        ))
         if self.valves.ENABLE_FLARE_IMAGE_MODEL:
             if not any(ModelFamily.base_model(m) == "gpt-image-2.5-flare" for m in model_ids):
                 model_ids.append("gpt-image-2.5-flare")
@@ -1474,7 +1481,7 @@ class Pipe:
         if ModelFamily.is_auto_model_routing(orig_model_norm):
             selected_router = (
                 valves.GPT6_AUTO_ROUTER_MODEL
-                if orig_model_norm == "gpt-6-auto"
+                if orig_model_norm in {"gpt-6-auto", "gpt-6.2-auto"}
                 else valves.AUTO_MODEL_ROUTER_MODEL
             )
             responses_body = await self._route_auto_model_and_reasoning(
@@ -1491,7 +1498,7 @@ class Pipe:
             responses_body.input = _strip_reasoning_items(responses_body.input)
 
         # Normalize legacy effort before capability/tool checks (minimal -> low).
-        if responses_body.model in {"gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol", "gpt-6.1-terra"} and responses_body.reasoning:
+        if responses_body.model in {"gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol", "gpt-6.2-sol", "gpt-6.1-terra"} and responses_body.reasoning:
             if "effort" in responses_body.reasoning:
                 responses_body.reasoning = {
                     **responses_body.reasoning,
@@ -1530,7 +1537,7 @@ class Pipe:
         if ModelFamily.is_auto_reasoning(orig_model_norm):
             fixed_router = (
                 valves.GPT6_AUTO_ROUTER_MODEL
-                if ModelFamily.base_model(orig_model_norm) in {"gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol", "gpt-6.1-terra"}
+                if ModelFamily.base_model(orig_model_norm) in {"gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol", "gpt-6.2-sol", "gpt-6.1-terra"}
                 else valves.AUTO_REASONING_ROUTER_MODEL
             )
             responses_body = await self._route_auto_reasoning(
@@ -1553,7 +1560,7 @@ class Pipe:
                     responses_body.model,
                     rp.get("effort"),
                     ceiling=getattr(valves, "ASTRA_AUTO_REASONING_MAX_EFFORT", "high")
-                    if ModelFamily.is_auto_reasoning(orig_model_norm) or orig_model_norm == "gpt-6-auto"
+                    if ModelFamily.is_auto_reasoning(orig_model_norm) or orig_model_norm in {"gpt-6-auto", "gpt-6.2-auto"}
                     else None,
                     fallback="low",
                 )
@@ -3820,11 +3827,11 @@ class Pipe:
         routing_hint: Optional[dict[str, Any]] = None,
         user_prompt: Optional[str] = None,
     ) -> ResponsesBody:
-        """Route gpt-5.6-auto or gpt-6-auto across model tiers + reasoning effort."""
-        is_gpt6_auto = ModelFamily._norm(public_alias) == "gpt-6-auto"
+        """Route gpt-5.6-auto or gpt-6.2-auto across model tiers + reasoning effort."""
+        is_gpt6_auto = ModelFamily._norm(public_alias) in {"gpt-6-auto", "gpt-6.2-auto"}
         sol_first = is_gpt6_auto
         if is_gpt6_auto:
-            model_order = ["gpt-6-luna", "gpt-6.1-terra", "gpt-6.1-sol"]
+            model_order = ["gpt-6-luna", "gpt-6.1-terra", "gpt-6.2-sol"]
             max_target = str(getattr(valves, "GPT6_AUTO_MAX_TARGET", "sol") or "sol").lower()
             fallback_target_setting = str(getattr(valves, "GPT6_AUTO_FALLBACK_TARGET", "sol") or "sol").lower()
             fallback_effort_setting = str(getattr(valves, "GPT6_AUTO_FALLBACK_EFFORT", "medium") or "medium").lower()
@@ -4005,7 +4012,7 @@ class Pipe:
         astra_rules = ""
 
         role_line = (
-            "You are the routing controller for gpt-6-auto. Do not solve the task. Select BOTH the lowest-cost "
+            "You are the routing controller for gpt-6.2-auto. Do not solve the task. Select BOTH the lowest-cost "
             "target model likely to deliver high-quality results and the lowest adequate reasoning effort."
             if is_gpt6_auto else
             "You are the routing controller for gpt-5.6-auto. Do not solve the task. Select BOTH the lowest-cost "
@@ -4039,7 +4046,7 @@ class Pipe:
         if sol_first:
             profile = "sol_first"
             terra_bias = "off"
-            profile_rules[profile] = "Use the cheapest suitable model. The maximum is GPT-6.1 Sol / medium."
+            profile_rules[profile] = "Use the cheapest suitable model. The maximum is GPT-6.2 Sol / medium."
             roles = "Luna = teaching materials and routine work; Terra = bounded implementation; Sol = reasoning and evidence-sensitive work."
             domain_rules = (
                 "Classify the current request in conversation context, including revisions to earlier deliverables. "
@@ -4243,7 +4250,7 @@ class Pipe:
         fallback_effort = normalize_effort(fallback_target, fallback_effort_setting)
         try:
             if event_emitter:
-                choices = "GPT-6 Luna / GPT-6.1 Terra/Sol" if is_gpt6_auto else "GPT-5.6 Luna/Terra/Sol"
+                choices = "GPT-6 Luna / GPT-6.1 Terra / GPT-6.2 Sol" if is_gpt6_auto else "GPT-5.6 Luna/Terra/Sol"
                 await event_emitter({
                     "type": "status",
                     "data": {"description": f"Smart routing {public_alias}: choosing {choices} and reasoning…"},
@@ -4833,7 +4840,7 @@ def _prepare_responses_request(params: Dict[str, Any]) -> Dict[str, Any]:
     for key in ("_auto_reasoning", "_auto_model_route", "_ocr_mode", "_auto_image"):
         body.pop(key, None)
     model = ModelFamily.base_model(str(body.get("model", "")))
-    if model not in {"gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol", "gpt-6.1-terra"}:
+    if model not in {"gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol", "gpt-6.2-sol", "gpt-6.1-terra"}:
         return body
     body["model"] = model
     reasoning = dict(body.get("reasoning") or {})

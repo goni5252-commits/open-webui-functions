@@ -55,7 +55,7 @@ def completed(text):
         {"type": "output_text", "text": text}]}]}
 
 
-def decision(model="gpt-6.1-sol", effort="medium", task="routine", kind="substantive"):
+def decision(model="gpt-6.2-sol", effort="medium", task="routine", kind="substantive"):
     return {"target_model": model, "reasoning_effort": effort, "task_class": task,
             "route_kind": kind, "explanation": "test routing decision"}
 
@@ -65,7 +65,7 @@ class RoutingTests(unittest.IsolatedAsyncioTestCase):
         self.pipe = m.Pipe()
         self.pipe.logger = logging.getLogger("test")
 
-    async def route(self, data=None, valves=None, hint=None, prompt="Explain this", alias="gpt-6-auto", response=None):
+    async def route(self, data=None, valves=None, hint=None, prompt="Explain this", alias="gpt-6.2-auto", response=None):
         self.pipe.send_openai_responses_nonstreaming_request = AsyncMock(
             return_value=response or completed(json.dumps(data or decision()))
         )
@@ -82,7 +82,7 @@ class RoutingTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_school_work_skips_classifier_and_keeps_source(self):
         for prompt, target in (("이 자료로 학습지를 제작해줘", "gpt-6-luna"),
-                               ("생기부를 분석해서 면접 활동지를 만들어줘", "gpt-6.1-sol")):
+                               ("생기부를 분석해서 면접 활동지를 만들어줘", "gpt-6.2-sol")):
             source = self.image_prompt(prompt)
             body = await self.route(prompt=source, hint={"min_target": "astra", "min_effort": "max"})
             self.pipe.send_openai_responses_nonstreaming_request.assert_not_awaited()
@@ -106,22 +106,22 @@ class RoutingTests(unittest.IsolatedAsyncioTestCase):
                     visual_content="other", visual_task="literal_extraction", visual_readability="readable")
         for prompt in ("풀어줘", "풀이 검토해줘", "solve this", ""):
             body = await self.route(data, prompt=self.image_prompt(prompt))
-            self.assertEqual((body.model, body.reasoning["effort"]), ("gpt-6.1-sol", "medium"))
+            self.assertEqual((body.model, body.reasoning["effort"]), ("gpt-6.2-sol", "medium"))
             self.assertEqual(body.model_router_result["router_image_count"], 1)
 
     async def test_visual_math_medium_and_ceiling(self):
         data = dict(decision("gpt-6.1-terra", "none", kind="simple"),
                     visual_content="math_science", visual_task="reasoning", visual_readability="readable")
         body = await self.route(data, prompt=self.image_prompt())
-        self.assertEqual((body.model, body.reasoning["effort"]), ("gpt-6.1-sol", "medium"))
+        self.assertEqual((body.model, body.reasoning["effort"]), ("gpt-6.2-sol", "medium"))
         body = await self.route(data, prompt=self.image_prompt(), valves=m.Pipe.Valves(GPT6_AUTO_MAX_TARGET="luna"))
         self.assertEqual(body.model, "gpt-6.1-terra")
         data.update(target_model="gpt-6-astra", task_class="agentic_exceptional")
         body = await self.route(data, prompt=self.image_prompt())
-        self.assertEqual(body.model, "gpt-6.1-sol")
+        self.assertEqual(body.model, "gpt-6.2-sol")
         data.update(target_model="gpt-6.1-terra", task_class="routine", visual_content="other", visual_task="literal_extraction")
         body = await self.route(data, prompt=self.image_prompt("수학 모의고사 풀어줘"))
-        self.assertEqual((body.model, body.reasoning["effort"]), ("gpt-6.1-sol", "medium"))
+        self.assertEqual((body.model, body.reasoning["effort"]), ("gpt-6.2-sol", "medium"))
 
     async def test_visual_extraction_and_uncertainty(self):
         data = dict(decision("gpt-6.1-terra", "none", kind="simple"),
@@ -130,13 +130,13 @@ class RoutingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(body.model, "gpt-6.1-terra")
         data["visual_readability"] = "uncertain"
         body = await self.route(data, prompt=self.image_prompt("글자만 추출해줘"))
-        self.assertEqual(body.model, "gpt-6.1-sol")
+        self.assertEqual(body.model, "gpt-6.2-sol")
 
     async def test_visual_invalid_result_and_terra_fallback_are_guarded(self):
         for result in ("{}", json.dumps(decision("gpt-6.1-terra", kind="simple"))):
             body = await self.route(response=completed(result), prompt=self.image_prompt(),
                                     valves=m.Pipe.Valves(GPT6_AUTO_FALLBACK_TARGET="luna"))
-            self.assertEqual(body.model, "gpt-6.1-sol")
+            self.assertEqual(body.model, "gpt-6.2-sol")
             self.assertTrue(body.model_router_result["fallback"])
 
     async def test_image_followup_wire_and_unrelated_request(self):
@@ -146,7 +146,7 @@ class RoutingTests(unittest.IsolatedAsyncioTestCase):
         data = dict(decision("gpt-6.1-terra", kind="simple"), visual_content="math_science",
                     visual_task="reasoning", visual_readability="readable")
         body = await self.route(data, prompt=prompt)
-        self.assertEqual(body.model, "gpt-6.1-sol")
+        self.assertEqual(body.model, "gpt-6.2-sol")
         wire = self.pipe.send_openai_responses_nonstreaming_request.call_args.args[0]
         self.assertIn("data:image/png", json.dumps(wire["input"]))
         self.assertEqual(prompt, before)
@@ -157,13 +157,13 @@ class RoutingTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_new_family_only_and_router_schema(self):
         body = await self.route()
-        self.assertEqual(body.model, "gpt-6.1-sol")
+        self.assertEqual(body.model, "gpt-6.2-sol")
         wire = self.pipe.send_openai_responses_nonstreaming_request.call_args.args[0]
         schema = wire["text"]["format"]["schema"]
-        self.assertEqual(schema["properties"]["target_model"]["enum"], ["gpt-6-luna", "gpt-6.1-terra", "gpt-6.1-sol"])
+        self.assertEqual(schema["properties"]["target_model"]["enum"], ["gpt-6-luna", "gpt-6.1-terra", "gpt-6.2-sol"])
         self.assertEqual(set(schema["required"]), set(schema["properties"]))
         self.assertIn("token_heavy", schema["properties"]["route_kind"]["enum"])
-        self.assertIn("maximum is GPT-6.1 Sol / medium", wire["instructions"])
+        self.assertIn("maximum is GPT-6.2 Sol / medium", wire["instructions"])
 
     async def test_simple_and_mechanical_work_can_use_terra(self):
         for kind in ("simple", "trivial", "mechanical_batch"):
@@ -177,22 +177,22 @@ class RoutingTests(unittest.IsolatedAsyncioTestCase):
                                    ("routine", "simple", "학생부 세특 작성해줘")):
             with self.subTest(task=task, kind=kind, prompt=prompt):
                 body = await self.route(decision("gpt-6.1-terra", task=task, kind=kind), prompt=prompt)
-                self.assertEqual(body.model, "gpt-6.1-sol")
+                self.assertEqual(body.model, "gpt-6.2-sol")
 
     async def test_astra_requires_exceptional_class(self):
         for task in ("routine", "professional", "hard_reasoning"):
             with self.subTest(task=task):
                 body = await self.route(decision("gpt-6-astra", "high", task))
-                self.assertEqual(body.model, "gpt-6.1-sol")
+                self.assertEqual(body.model, "gpt-6.2-sol")
                 self.assertEqual(body.reasoning["effort"], "medium")
 
     async def test_exceptional_astra_falls_back_to_sol_medium(self):
         body = await self.route(decision("gpt-6-astra", "none", "agentic_exceptional"))
-        self.assertEqual((body.model, body.reasoning["effort"]), ("gpt-6.1-sol", "medium"))
+        self.assertEqual((body.model, body.reasoning["effort"]), ("gpt-6.2-sol", "medium"))
 
     async def test_astra_disabled_ceiling_and_saved_terra_ceiling(self):
-        for settings, target in (({"ENABLE_GPT6_ASTRA": False}, "gpt-6.1-sol"),
-                                 ({"ASTRA_PROMOTION": "disabled"}, "gpt-6.1-sol"),
+        for settings, target in (({"ENABLE_GPT6_ASTRA": False}, "gpt-6.2-sol"),
+                                 ({"ASTRA_PROMOTION": "disabled"}, "gpt-6.2-sol"),
                                  ({"GPT6_AUTO_MAX_TARGET": "terra"}, "gpt-6.1-terra"),
                                  ({"GPT6_AUTO_MAX_TARGET": "luna"}, "gpt-6.1-terra")):
             with self.subTest(settings=settings):
@@ -202,9 +202,9 @@ class RoutingTests(unittest.IsolatedAsyncioTestCase):
     async def test_hwpx_hints_respect_tier_and_effort_caps(self):
         hint = {"min_target": "astra", "min_effort": "max"}
         body = await self.route(decision("gpt-6.1-terra", "none", kind="simple"), hint=hint)
-        self.assertEqual((body.model, body.reasoning["effort"]), ("gpt-6.1-sol", "medium"))
+        self.assertEqual((body.model, body.reasoning["effort"]), ("gpt-6.2-sol", "medium"))
         body = await self.route(decision("gpt-6.1-terra", "none", kind="simple"), hint={"min_target": "terra"})
-        self.assertEqual(body.model, "gpt-6.1-sol")
+        self.assertEqual(body.model, "gpt-6.2-sol")
         body = await self.route(decision("gpt-6.1-terra", "none", kind="simple"),
                                 valves=m.Pipe.Valves(GPT6_AUTO_MAX_TARGET="luna"), hint=hint)
         self.assertEqual(body.model, "gpt-6.1-terra")
@@ -215,31 +215,31 @@ class RoutingTests(unittest.IsolatedAsyncioTestCase):
                          dict(completed(json.dumps(decision())), status="incomplete")):
             with self.subTest(response=response):
                 body = await self.route(response=response)
-                self.assertEqual((body.model, body.reasoning["effort"]), ("gpt-6.1-sol", "medium"))
+                self.assertEqual((body.model, body.reasoning["effort"]), ("gpt-6.2-sol", "medium"))
                 self.assertTrue(body.model_router_result["fallback"])
 
     async def test_transport_failure_fallback_and_cancellation(self):
-        body = m.ResponsesBody(model="gpt-6-auto", input="hello")
+        body = m.ResponsesBody(model="gpt-6.2-auto", input="hello")
         self.pipe.send_openai_responses_nonstreaming_request = AsyncMock(side_effect=RuntimeError("HTTP 503"))
-        result = await self.pipe._route_auto_model_and_reasoning("gpt-6.1-terra", body, m.Pipe.Valves(), public_alias="gpt-6-auto")
-        self.assertEqual(result.model, "gpt-6.1-sol")
+        result = await self.pipe._route_auto_model_and_reasoning("gpt-6.1-terra", body, m.Pipe.Valves(), public_alias="gpt-6.2-auto")
+        self.assertEqual(result.model, "gpt-6.2-sol")
         self.assertTrue(result.model_router_result["fallback"])
         self.pipe.send_openai_responses_nonstreaming_request = AsyncMock(side_effect=asyncio.CancelledError())
         with self.assertRaises(asyncio.CancelledError):
-            await self.pipe._route_auto_model_and_reasoning("gpt-6.1-terra", body, m.Pipe.Valves(), public_alias="gpt-6-auto")
+            await self.pipe._route_auto_model_and_reasoning("gpt-6.1-terra", body, m.Pipe.Valves(), public_alias="gpt-6.2-auto")
 
     async def test_sol61_alias_and_none_effort(self):
-        self.assertEqual(m.ModelFamily.base_model("openai_responses.gpt-6-auto"), "gpt-6.1-sol")
-        body = await self.route(decision("gpt-6.1-sol", "none", kind="simple"))
-        self.assertEqual((body.model, body.reasoning["effort"]), ("gpt-6.1-sol", "low"))
+        self.assertEqual(m.ModelFamily.base_model("openai_responses.gpt-6.2-auto"), "gpt-6.2-sol")
+        body = await self.route(decision("gpt-6.2-sol", "none", kind="simple"))
+        self.assertEqual((body.model, body.reasoning["effort"]), ("gpt-6.2-sol", "low"))
         body = await self.route(response=completed("{}"), valves=m.Pipe.Valves(
             GPT6_AUTO_FALLBACK_TARGET="sol", GPT6_AUTO_FALLBACK_EFFORT="none",
             ENABLE_GPT61_SOL_MODEL=False))
-        self.assertEqual((body.model, body.reasoning["effort"]), ("gpt-6.1-sol", "low"))
+        self.assertEqual((body.model, body.reasoning["effort"]), ("gpt-6.2-sol", "low"))
 
     async def test_old_sol_router_result_is_rejected(self):
         body = await self.route(decision("gpt-6-sol"))
-        self.assertEqual(body.model, "gpt-6.1-sol")
+        self.assertEqual(body.model, "gpt-6.2-sol")
         self.assertTrue(body.model_router_result["fallback"])
 
     async def test_saved_luna_fallback_uses_terra(self):
@@ -248,7 +248,7 @@ class RoutingTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_token_heavy_implementation_prefers_terra(self):
         for task in ("routine", "professional"):
-            for target in ("gpt-6-luna", "gpt-6.1-terra", "gpt-6.1-sol"):
+            for target in ("gpt-6-luna", "gpt-6.1-terra", "gpt-6.2-sol"):
                 body = await self.route(decision(target, "medium", task, "token_heavy"),
                                         prompt="명세대로 CRUD 코드와 테스트를 작성해줘")
                 self.assertEqual((body.model, body.reasoning["effort"]), ("gpt-6.1-terra", "medium"))
@@ -258,13 +258,13 @@ class RoutingTests(unittest.IsolatedAsyncioTestCase):
         for task, prompt in (("hard_reasoning", "Find the race condition in this service"),
                              ("routine", "학생부 세특 작성해줘")):
             body = await self.route(decision("gpt-6.1-terra", "high", task, "token_heavy"), prompt=prompt)
-            self.assertEqual(body.model, "gpt-6.1-sol")
+            self.assertEqual(body.model, "gpt-6.2-sol")
         data = dict(decision("gpt-6.1-terra", "low", "professional", "token_heavy"),
                     visual_content="math_science", visual_task="reasoning", visual_readability="readable")
         body = await self.route(data, prompt=self.image_prompt("수학 문제 풀어줘"))
-        self.assertEqual((body.model, body.reasoning["effort"]), ("gpt-6.1-sol", "medium"))
+        self.assertEqual((body.model, body.reasoning["effort"]), ("gpt-6.2-sol", "medium"))
         body = await self.route(decision("gpt-6.1-terra", kind="token_heavy"), hint={"min_target": "terra"})
-        self.assertEqual(body.model, "gpt-6.1-sol")
+        self.assertEqual(body.model, "gpt-6.2-sol")
 
     async def test_luna_can_handle_simple_requests(self):
         body = await self.route(decision("gpt-6-luna", kind="simple"))
@@ -288,10 +288,29 @@ class RoutingTests(unittest.IsolatedAsyncioTestCase):
                 body = await self.pipe._route_auto_reasoning("gpt-6-luna", m.ResponsesBody(model=model, input="hello"), [], m.Pipe.Valves(), public_alias=model + "-auto")
                 self.assertEqual((body.model, body.reasoning["effort"]), (model, "high"))
 
+    async def test_legacy_auto_alias_matches_renamed_model(self):
+        for prompt, target in (("학습지 제작", "gpt-6-luna"), ("생기부 분석", "gpt-6.2-sol")):
+            for alias in ("gpt-6-auto", "gpt-6.2-auto", "custom.gpt-6-auto", "custom.gpt-6.2-auto"):
+                with self.subTest(prompt=prompt, alias=alias):
+                    body = await self.route(alias=alias, prompt=prompt)
+                    self.assertEqual((body.model, body.reasoning["effort"]), (target, "medium"))
+                    self.pipe.send_openai_responses_nonstreaming_request.assert_not_awaited()
+
+    async def test_saved_auto_names_migrate_and_deduplicate(self):
+        self.pipe.valves = m.Pipe.Valves(
+            MODEL_ID="gpt-6-auto,custom.gpt-6-auto,gpt-6.2-auto,gpt-6.1-sol",
+            ENABLE_GPT61_SOL_MODEL=False)
+        models = await self.pipe.pipes()
+        ids = [item["id"] for item in models]
+        self.assertEqual(ids.count("gpt-6.2-auto"), 1)
+        self.assertNotIn("gpt-6-auto", ids)
+        self.assertNotIn("custom.gpt-6-auto", ids)
+        self.assertIn({"id": "gpt-6.2-auto", "name": "OpenAI: gpt-6.2-auto"}, models)
+
     async def test_model_listing_with_saved_model_list_and_disabled_astra(self):
         self.pipe.valves = m.Pipe.Valves(MODEL_ID="gpt-6-auto,gpt-6-astra,gpt-6-astra-auto,gpt-5.6-ocr", ENABLE_GPT6_ASTRA=False)
         ids = [item["id"] for item in await self.pipe.pipes()]
-        for model in ("gpt-6-auto", "gpt-6-sol", "gpt-6-luna", "gpt-6-sol-auto", "gpt-6-luna-auto", "gpt-6-ocr"):
+        for model in ("gpt-6.2-auto", "gpt-6-sol", "gpt-6-luna", "gpt-6-sol-auto", "gpt-6-luna-auto", "gpt-6-ocr"):
             self.assertIn(model, ids)
         self.assertNotIn("gpt-6-astra", ids)
         self.assertNotIn("gpt-6-astra-auto", ids)
@@ -305,7 +324,7 @@ class ConfigurationTests(unittest.TestCase):
                     self.assertEqual(m.ModelFamily._norm(prefix + model), model)
                     self.assertEqual(m.ModelFamily.base_model(prefix + model), m.ModelFamily.base_model(model))
                     self.assertEqual(m.ModelFamily.params(prefix + model), m.ModelFamily.params(model))
-        self.assertEqual(m.ModelFamily._norm("my_pipe.gpt-6.1-sol-2026-09-01"), "gpt-6.1-sol")
+        self.assertEqual(m.ModelFamily._norm("my_pipe.gpt-6.2-sol-2026-09-01"), "gpt-6.2-sol")
         self.assertEqual(m.ModelFamily._norm("vendor.unknown-model"), "vendor.unknown-model")
         self.assertEqual(m.ModelFamily._norm("openai_responses.custom-model"), "custom-model")
 
@@ -530,15 +549,15 @@ class PipeIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_school_routes_reach_generation_without_classifier(self):
         for stream in (True, False):
-            for prompt, target in (("학습지 제작", "gpt-6-luna"), ("생기부 분석", "gpt-6.1-sol")):
-                pipe, _, body = await self.run_pipe("gpt-6-auto", stream, effort="high", prompt=prompt)
+            for prompt, target in (("학습지 제작", "gpt-6-luna"), ("생기부 분석", "gpt-6.2-sol")):
+                pipe, _, body = await self.run_pipe("gpt-6.2-auto", stream, effort="high", prompt=prompt)
                 pipe.send_openai_responses_nonstreaming_request.assert_not_awaited()
                 self.assertEqual((body.model, body.reasoning["effort"]), (target, "medium"))
 
     async def test_token_heavy_terra_keeps_tools_in_both_ui_paths(self):
         for stream in (True, False):
-            pipe, _, body = await self.run_pipe("gpt-6-auto", stream,
-                route_decision=decision("gpt-6.1-sol", "medium", "professional", "token_heavy"))
+            pipe, _, body = await self.run_pipe("gpt-6.2-auto", stream,
+                route_decision=decision("gpt-6.2-sol", "medium", "professional", "token_heavy"))
             self.assertEqual(body.model, "gpt-6.1-terra")
             self.assertEqual({t["type"] for t in body.tools}, {"function", "web_search"})
             self.assertEqual(body.reasoning["effort"], "medium")
@@ -547,8 +566,8 @@ class PipeIntegrationTests(unittest.IsolatedAsyncioTestCase):
     async def test_auto_works_when_astra_disabled_in_both_ui_paths(self):
         for stream in (True, False):
             with self.subTest(stream=stream):
-                pipe, result, body = await self.run_pipe("gpt-6-auto", stream, {"ENABLE_GPT6_ASTRA": False})
-                self.assertEqual(body.model, "gpt-6.1-sol")
+                pipe, result, body = await self.run_pipe("gpt-6.2-auto", stream, {"ENABLE_GPT6_ASTRA": False})
+                self.assertEqual(body.model, "gpt-6.2-sol")
                 self.assertEqual(body.reasoning["effort"], "medium")
                 self.assertEqual({t["type"] for t in body.tools}, {"function", "web_search"})
                 self.assertEqual(pipe.send_openai_responses_nonstreaming_request.call_args.args[0]["model"], "gpt-6-luna")
@@ -557,13 +576,13 @@ class PipeIntegrationTests(unittest.IsolatedAsyncioTestCase):
         for prefix in ("openai_responses_api_manifold", "my_custom_pipe"):
             for stream in (True, False):
                 with self.subTest(prefix=prefix, stream=stream):
-                    pipe, _, body = await self.run_pipe("gpt-6-auto", stream, prefix=prefix)
-                    self.assertEqual(body.model, "gpt-6.1-sol")
+                    pipe, _, body = await self.run_pipe("gpt-6.2-auto", stream, prefix=prefix)
+                    self.assertEqual(body.model, "gpt-6.2-sol")
                     pipe.send_openai_responses_nonstreaming_request.assert_awaited_once()
 
     async def test_custom_model_metadata_keeps_body_auto_routing(self):
-        pipe, _, body = await self.run_pipe("gpt-6-auto", metadata_id="my-workspace-model")
-        self.assertEqual(body.model, "gpt-6.1-sol")
+        pipe, _, body = await self.run_pipe("gpt-6.2-auto", metadata_id="my-workspace-model")
+        self.assertEqual(body.model, "gpt-6.2-sol")
         pipe.send_openai_responses_nonstreaming_request.assert_awaited_once()
 
     async def test_fixed_alias_uses_new_router_and_keeps_luna(self):
