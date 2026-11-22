@@ -4,11 +4,11 @@ author: owndev and olivier-lacroix. editied by goni5252
 author_url: https://github.com/owndev/
 project_url: https://github.com/owndev/Open-WebUI-Functions
 funding_url: https://github.com/sponsors/owndev
-version: 1.26.3
+version: 1.27.0
 required_open_webui_version: 0.9.0
 requirements: google-genai==3.3.0
 license: Apache License 2.0
-description: Gemini 대화, low/medium/high 자동 추론, 이미지 생성·편집, Hydrogen 한글 OCR 및 RAG 우회를 지원합니다.
+description: Gemini 대화, low/medium/high 자동 추론, 이미지 생성·편집, Hydrogen·Neon 한글 OCR 및 RAG 우회를 지원합니다.
 """
 
 import os
@@ -263,7 +263,7 @@ class Pipe:
         AUTO_THINKING: bool = Field(
             default=os.getenv("GOOGLE_AUTO_THINKING", "true").lower() == "true",
             description=(
-                "Automatically choose Gemini 3 Flash / Gemini 4 Hydrogen thinking_level from the current request "
+                "Automatically choose Gemini 3 Flash / Gemini 4 Hydrogen/Neon thinking_level from the current request "
                 "using local heuristics only (no extra router API call). Explicit "
                 "per-chat reasoning_effort always wins."
             ),
@@ -480,7 +480,7 @@ class Pipe:
             default=os.getenv("GOOGLE_ENABLE_OCR_VIRTUAL_MODEL", "true").lower()
             == "true",
             description=(
-                "Expose Hydrogen Korean OCR and the configured OCR model in Open WebUI. The configured model "
+                "Expose Hydrogen and Neon Korean OCR and the configured OCR model in Open WebUI. The configured model "
                 "is mapped internally to OCR_BASE_MODEL_ID before calling Gemini."
             ),
         )
@@ -566,12 +566,12 @@ class Pipe:
         THINKING_BUDGET: int = Field(
             default=int(os.getenv("GOOGLE_THINKING_BUDGET", "-1")),
             description="Thinking budget for Gemini 2.5 models (0=disabled, -1=dynamic, 1-32768=fixed token limit). "
-            "Not used for Gemini 3 or Gemini 4 Hydrogen, which use THINKING_LEVEL instead.",
+            "Not used for Gemini 3 or Gemini 4 Hydrogen/Neon, which use THINKING_LEVEL instead.",
         )
         THINKING_LEVEL: str = Field(
             default=os.getenv("GOOGLE_THINKING_LEVEL", ""),
             description=(
-                "Manual fallback thinking level. Gemini 4 Hydrogen uses low/medium/high; xhigh is capped at high. "
+                "Manual fallback thinking level. Gemini 4 Hydrogen/Neon uses low/medium/high; xhigh is capped at high. "
                 "Gemini 3.7+ Flash "
                 "supports low/medium/high (minimal is not supported); Gemini 3.5/3.6 "
                 "Flash support minimal/low/medium/high. Some Pro/image variants expose "
@@ -691,11 +691,11 @@ class Pipe:
         MODEL_ADDITIONAL: str = Field(
             default=os.getenv(
                 "GOOGLE_MODEL_ADDITIONAL",
-                "gemini-4-hydrogen,gemini-3.7-flash,gemini-3.1-flash-image",
+                "gemini-4-hydrogen,gemini-4-neon,gemini-3.7-flash,gemini-3.1-flash-image",
             ),
             description=(
                 "A comma-separated list of model IDs to manually add to the list of "
-                "available models. Defaults include Gemini 4 Hydrogen, Gemini 3.7 Flash and the GA "
+                "available models. Defaults include Gemini 4 Hydrogen/Neon, Gemini 3.7 Flash and the GA "
                 "Nano Banana 2 model gemini-3.1-flash-image."
             ),
         )
@@ -1416,16 +1416,19 @@ class Pipe:
             model_map = {model["id"]: model for model in available_models}
 
             # Saved Valves keep old MODEL_ADDITIONAL defaults after upgrades.
-            # Register Hydrogen before the user's whitelist is applied.
-            model_map.setdefault("gemini-4-hydrogen", {
-                "id": "gemini-4-hydrogen",
-                "name": "Gemini 4 Hydrogen",
-                "image_generation": False,
-                "video_generation": False,
-            })
-
-            if model_map["gemini-4-hydrogen"]["name"] == "gemini-4-hydrogen":
-                model_map["gemini-4-hydrogen"]["name"] = "Gemini 4 Hydrogen"
+            # Register both models before the user's whitelist is applied.
+            for model_id, model_name in (
+                ("gemini-4-hydrogen", "Gemini 4 Hydrogen"),
+                ("gemini-4-neon", "Gemini 4 Neon"),
+            ):
+                model_map.setdefault(model_id, {
+                    "id": model_id,
+                    "name": model_name,
+                    "image_generation": False,
+                    "video_generation": False,
+                })
+                if model_map[model_id]["name"] == model_id:
+                    model_map[model_id]["name"] = model_name
 
             # Nano Banana 2 preview was shut down in June 2026. Do not expose
             # the retired preview ID even if a stale SDK/cache still lists it.
@@ -1438,12 +1441,16 @@ class Pipe:
             # Add an Open WebUI-only virtual OCR model. It is never sent to the
             # Google API directly; _prepare_model_id() maps it to OCR_BASE_MODEL_ID.
             if self.valves.ENABLE_OCR_VIRTUAL_MODEL:
-                model_map["gemini-4-hydrogen-ocr"] = {
-                    "id": "gemini-4-hydrogen-ocr",
-                    "name": "Gemini 4 Hydrogen 한글 OCR (High-Res)",
-                    "image_generation": False,
-                    "video_generation": False,
-                }
+                for model_id, model_name in (
+                    ("gemini-4-hydrogen", "Gemini 4 Hydrogen"),
+                    ("gemini-4-neon", "Gemini 4 Neon"),
+                ):
+                    model_map[f"{model_id}-ocr"] = {
+                        "id": f"{model_id}-ocr",
+                        "name": f"{model_name} 한글 OCR (High-Res)",
+                        "image_generation": False,
+                        "video_generation": False,
+                    }
                 ocr_virtual_id = self.strip_prefix(
                     self.valves.OCR_VIRTUAL_MODEL_ID or ""
                 )
@@ -1617,7 +1624,7 @@ class Pipe:
         """
         Check if a model supports the thinking_level parameter.
 
-        Gemini 3 and Gemini 4 Hydrogen use thinking_level, never thinking_budget.
+        Gemini 3 and Gemini 4 Hydrogen/Neon use thinking_level, never thinking_budget.
         Other models (like Gemini 2.5) use thinking_budget instead.
 
         Args:
@@ -1626,7 +1633,7 @@ class Pipe:
         Returns:
             True if the model supports thinking_level, False otherwise
         """
-        return self._is_gemini_3_family_model(model_id) or model_id.lower() == "gemini-4-hydrogen"
+        return self._is_gemini_3_family_model(model_id) or model_id.lower() in {"gemini-4-hydrogen", "gemini-4-neon"}
 
     def _get_supported_thinking_levels(self, model_id: str) -> List[str]:
         """Return known/compatible thinking levels for the selected Gemini model.
@@ -1638,7 +1645,7 @@ class Pipe:
         """
         model_lower = model_id.lower()
 
-        if model_lower == "gemini-4-hydrogen":
+        if model_lower in {"gemini-4-hydrogen", "gemini-4-neon"}:
             return ["low", "medium", "high", "xhigh"]
 
         # Nano Banana 2 / Flash-Lite Image use a deliberately narrow control surface.
@@ -1732,9 +1739,9 @@ class Pipe:
             )
             return None
 
-        # Hydrogen deliberately limits reasoning cost/latency to high, even
+        # Hydrogen/Neon deliberately limit reasoning cost/latency to high, even
         # when an older saved chat or Valve still requests xhigh.
-        if model_id.lower() == "gemini-4-hydrogen" and normalized == "xhigh":
+        if model_id.lower() in {"gemini-4-hydrogen", "gemini-4-neon"} and normalized == "xhigh":
             normalized = "high"
 
         supported_levels = self._get_supported_thinking_levels(model_id)
@@ -2181,6 +2188,7 @@ class Pipe:
             "gemini-3.7-flash-ocr",
             "gemini-3.8-flash-ocr",
             "gemini-4-hydrogen-ocr",
+            "gemini-4-neon-ocr",
         } and bool(requested)
 
     def _apply_ocr_system_prompt(
@@ -2238,9 +2246,9 @@ class Pipe:
             return mapped
 
         if is_ocr_alias:
-            # Dedicated Hydrogen alias must not inherit a persisted Flash base.
-            if model_id == "gemini-4-hydrogen-ocr":
-                return "gemini-4-hydrogen"
+            # Dedicated Gemini 4 aliases must not inherit a persisted Flash base.
+            if model_id in {"gemini-4-hydrogen-ocr", "gemini-4-neon-ocr"}:
+                return model_id.removesuffix("-ocr")
             base_model_id = self.strip_prefix(
                 (self.valves.OCR_BASE_MODEL_ID or "").strip()
             )
@@ -4122,7 +4130,7 @@ class Pipe:
         return False
 
     def _is_auto_thinking_candidate_model(self, model_id: str) -> bool:
-        """Auto-route thinking for Gemini 3.x Flash and Gemini 4 Hydrogen.
+        """Auto-route thinking for Gemini 3.x Flash and Gemini 4 Hydrogen/Neon.
 
         OCR, image, video, Pro, and older Gemini 2.5 models keep their existing
         dedicated/default thinking behavior.
@@ -4134,7 +4142,7 @@ class Pipe:
             return False
         if self._check_video_generation_support(model_lower):
             return False
-        return model_lower == "gemini-4-hydrogen" or (
+        return model_lower in {"gemini-4-hydrogen", "gemini-4-neon"} or (
             "flash" in model_lower and "image" not in model_lower
         )
 
@@ -4318,7 +4326,7 @@ class Pipe:
         score, reasons = self._auto_thinking_text_score(text)
         # Consult one bounded prior user request only for explicit follow-ups.
         # Ordinary thanks/new questions must not inherit old expensive reasoning.
-        if model_id.lower() == "gemini-4-hydrogen" and len(text) <= 200 and re.search(
+        if model_id.lower() in {"gemini-4-hydrogen", "gemini-4-neon"} and len(text) <= 200 and re.search(
             r"^(?:그 부분|그 이유|왜 그런|이어서|계속해|더 자세히|좀 더 자세히|"
             r"continue\b|explain (?:that|why)\b|more detail\b)", text.strip(), re.I
         ):

@@ -1,4 +1,4 @@
-"""Hydrogen model discovery and real SDK configuration; no paid API calls."""
+"""Hydrogen/Neon model discovery and real SDK configuration; no paid API calls."""
 import logging
 import unittest
 from unittest.mock import Mock
@@ -12,6 +12,8 @@ from test_conversation_images import Gemini
 
 @unittest.skipIf(types is None, "google-genai is required for SDK configuration checks")
 class HydrogenTests(unittest.TestCase):
+    model_id = "gemini-4-hydrogen"
+
     def setUp(self):
         self.pipe = object.__new__(Gemini)
         self.pipe.valves = Gemini.Valves()
@@ -19,8 +21,8 @@ class HydrogenTests(unittest.TestCase):
         self.pipe._model_cache = None
         self.pipe._model_cache_time = 0
 
-    def config(self, body=None, model='gemini-4-hydrogen'):
-        return self.pipe._configure_generation(body or {}, None, {}, model_id=model)
+    def config(self, body=None, model=None):
+        return self.pipe._configure_generation(body or {}, None, {}, model_id=model or self.model_id)
 
     def test_supported_levels_and_legacy_budget_omitted(self):
         for level in ('low', 'medium', 'high', 'xhigh'):
@@ -41,8 +43,8 @@ class HydrogenTests(unittest.TestCase):
         cfg = self.config()
         self.assertIsNone(cfg.thinking_config.thinking_level)
         self.assertIsNone(cfg.thinking_config.thinking_budget)
-        self.assertFalse(self.pipe._check_image_generation_support('gemini-4-hydrogen'))
-        self.assertTrue(self.pipe._is_auto_thinking_candidate_model('gemini-4-hydrogen'))
+        self.assertFalse(self.pipe._check_image_generation_support(self.model_id))
+        self.assertTrue(self.pipe._is_auto_thinking_candidate_model(self.model_id))
 
     def test_discovery_with_saved_valves_and_whitelist(self):
         self.pipe.valves.MODEL_ADDITIONAL = 'gemini-3.7-flash'
@@ -50,32 +52,32 @@ class HydrogenTests(unittest.TestCase):
         client.models.list.return_value = []
         self.pipe._get_client = lambda: client
         models = self.pipe.get_google_models(force_refresh=True)
-        self.assertEqual(sum(m['id'] == 'gemini-4-hydrogen' for m in models), 1)
+        self.assertEqual(sum(m['id'] == self.model_id for m in models), 1)
         self.pipe.valves.MODEL_WHITELIST = 'gemini-3.7-flash'
-        self.assertNotIn('gemini-4-hydrogen', [m['id'] for m in self.pipe.get_google_models(force_refresh=True)])
-        self.pipe.valves.MODEL_WHITELIST = 'gemini-4-hydrogen'
-        client.models.list.return_value = [types.Model(name='models/gemini-4-hydrogen', supported_actions=['generateContent'])]
+        self.assertNotIn(self.model_id, [m['id'] for m in self.pipe.get_google_models(force_refresh=True)])
+        self.pipe.valves.MODEL_WHITELIST = self.model_id
+        client.models.list.return_value = [types.Model(name=f'models/{self.model_id}', supported_actions=['generateContent'])]
         self.assertEqual(len(self.pipe.get_google_models(force_refresh=True)), 1)
 
     def test_prefix_and_older_model_compatibility(self):
-        self.assertEqual(self.pipe._prepare_model_id('google_gemini.gemini-4-hydrogen'), 'gemini-4-hydrogen')
+        self.assertEqual(self.pipe._prepare_model_id(f'google_gemini.{self.model_id}'), self.model_id)
         self.assertEqual(self.config({'reasoning_effort': 'xhigh'}, 'gemini-3.8-flash').thinking_config.thinking_level.value.lower(), 'high')
         self.assertEqual(self.config({'thinking_budget': 1024}, 'gemini-2.5-flash').thinking_config.thinking_budget, 1024)
 
     def test_auto_levels_followup_and_stale_history(self):
         for text, expected in [('안녕', 'low'), ('장단점을 비교해줘', 'medium'), ('정리를 엄밀하게 증명해줘', 'high')]:
             body = {'messages': [{'role': 'user', 'content': text}]}
-            self.assertEqual(self.pipe._select_auto_thinking_level(body, 'gemini-4-hydrogen')[0], expected)
+            self.assertEqual(self.pipe._select_auto_thinking_level(body, self.model_id)[0], expected)
         body = {'messages': [{'role': 'user', 'content': '정리를 엄밀하게 증명해줘'},
                              {'role': 'assistant', 'content': '증명'},
                              {'role': 'user', 'content': '더 자세히 설명해줘'}]}
-        self.assertEqual(self.pipe._select_auto_thinking_level(body, 'gemini-4-hydrogen')[0], 'high')
+        self.assertEqual(self.pipe._select_auto_thinking_level(body, self.model_id)[0], 'high')
         body['messages'][-1]['content'] = '고마워'
-        self.assertEqual(self.pipe._select_auto_thinking_level(body, 'gemini-4-hydrogen')[0], 'low')
+        self.assertEqual(self.pipe._select_auto_thinking_level(body, self.model_id)[0], 'low')
         self.pipe.valves.AUTO_THINKING_DEFAULT_LEVEL = 'xhigh'
-        self.assertEqual(self.pipe._select_auto_thinking_level(body, 'gemini-4-hydrogen')[0], 'high')
+        self.assertEqual(self.pipe._select_auto_thinking_level(body, self.model_id)[0], 'high')
         self.pipe.valves.AUTO_THINKING = False
-        self.assertIsNone(self.pipe._select_auto_thinking_level(body, 'gemini-4-hydrogen')[0])
+        self.assertIsNone(self.pipe._select_auto_thinking_level(body, self.model_id)[0])
 
     def test_image_intent_and_visual_followup_selection(self):
         session = SimpleNamespace(entries={'image': {'role': 'user'}})
@@ -91,11 +93,11 @@ class HydrogenTests(unittest.TestCase):
         client.models.list.return_value = []
         self.pipe._get_client = lambda: client
         ids = [m['id'] for m in self.pipe.get_google_models(force_refresh=True)]
-        self.assertIn('gemini-4-hydrogen-ocr', ids)
+        self.assertIn(f'{self.model_id}-ocr', ids)
         self.assertIn('gemini-3.8-flash-ocr', ids)
-        alias = 'google_gemini.gemini-4-hydrogen-ocr'
+        alias = f'google_gemini.{self.model_id}-ocr'
         self.assertTrue(self.pipe._is_ocr_virtual_model(alias))
-        self.assertEqual(self.pipe._prepare_model_id(alias), 'gemini-4-hydrogen')
+        self.assertEqual(self.pipe._prepare_model_id(alias), self.model_id)
         self.assertEqual(self.pipe._prepare_model_id('gemini-3.8-flash-ocr'), 'gemini-3.8-flash')
         cfg = self.config({'model': alias, 'reasoning_effort': 'high'})
         self.assertEqual(cfg.thinking_config.thinking_level.value.lower(), 'low')
@@ -103,12 +105,14 @@ class HydrogenTests(unittest.TestCase):
         self.assertEqual(cfg.media_resolution.value, 'MEDIA_RESOLUTION_HIGH')
         self.assertFalse(cfg.tools)
         self.pipe.valves.ENABLE_OCR_VIRTUAL_MODEL = False
-        self.assertNotIn('gemini-4-hydrogen-ocr', [m['id'] for m in self.pipe.get_google_models(force_refresh=True)])
+        self.assertNotIn(f'{self.model_id}-ocr', [m['id'] for m in self.pipe.get_google_models(force_refresh=True)])
 
 
 
 @unittest.skipIf(types is None, "google-genai is required for SDK integration checks")
 class HydrogenPipelineTests(unittest.IsolatedAsyncioTestCase):
+    model_id = "gemini-4-hydrogen"
+
     from test_conversation_images import GeminiFullPipelineTests as _Base
     setUp = _Base.setUp
     asyncTearDown = _Base.asyncTearDown
@@ -126,7 +130,7 @@ class HydrogenPipelineTests(unittest.IsolatedAsyncioTestCase):
             stream = AsyncMock(return_value=object())
             with patch.object(self.client.aio.models, 'generate_content_stream', stream), patch.object(
                     self.client.aio.models, 'generate_content', AsyncMock()) as nonstream:
-                result = await self.pipe.pipe({'model': 'gemini-4-hydrogen', 'stream': True,
+                result = await self.pipe.pipe({'model': self.model_id, 'stream': True,
                     'messages': [{'role': 'user', 'content': text}]})
             self.assertIs(result, stream.return_value)
             stream.assert_awaited_once()
@@ -141,13 +145,13 @@ class HydrogenPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.pipe.valves.AUTO_THINKING = True
         http = AsyncMock(side_effect=[self.tool_response(), self.response('완료')])
         with patch.object(self.client.aio.models, '_generate_content', http):
-            result = await self.pipe.pipe({'model': 'gemini-4-hydrogen', 'stream': True,
+            result = await self.pipe.pipe({'model': self.model_id, 'stream': True,
                 'messages': [{'role': 'user', 'content': '고양이를 그려줘'}]}, __event_emitter__=AsyncMock())
         self.assertIn('![Generated Image', result)
         self.image_api.assert_awaited_once()
         self.assertEqual(self.image_api.call_args.kwargs['model'], 'gemini-3.1-flash-image')
         self.assertEqual(http.await_count, 2)
-        self.assertTrue(all(c.kwargs['model'] == 'gemini-4-hydrogen' for c in http.call_args_list))
+        self.assertTrue(all(c.kwargs['model'] == self.model_id for c in http.call_args_list))
 
     async def test_manual_override_and_background_exclusion(self):
         from unittest.mock import AsyncMock, patch
@@ -158,7 +162,7 @@ class HydrogenPipelineTests(unittest.IsolatedAsyncioTestCase):
                                             (None, {'task': 'title_generation'}, None)]:
             stream = AsyncMock(return_value=object())
             with patch.object(self.client.aio.models, 'generate_content_stream', stream):
-                await self.pipe.pipe({'model': 'gemini-4-hydrogen', 'stream': True,
+                await self.pipe.pipe({'model': self.model_id, 'stream': True,
                     'reasoning_effort': effort, 'messages': [{'role': 'user', 'content': '안녕'}]},
                     __metadata__=metadata)
             thinking = stream.call_args.kwargs['config'].thinking_config
@@ -185,7 +189,7 @@ class HydrogenPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.pipe._get_client = lambda: self.client
         self.pipe._handle_streaming_response = lambda iterator, *a, **kw: iterator
         metadata = {}
-        body = {'model': 'google_gemini.gemini-4-hydrogen-ocr', 'stream': True,
+        body = {'model': f'google_gemini.{self.model_id}-ocr', 'stream': True,
                 'files': [{'id': 'scan', 'type': 'file', 'name': 'scan.pdf', 'content_type': 'application/pdf'}],
                 'messages': [{'role': 'user', 'content': '한글 그대로 전사해줘 <context>partial RAG text</context>'}]}
         body = await companion.inlet(body, __metadata__=metadata)
@@ -196,7 +200,7 @@ class HydrogenPipelineTests(unittest.IsolatedAsyncioTestCase):
             await self.pipe.pipe(body, __metadata__=metadata)
         stream.assert_awaited_once()
         sent = stream.call_args.kwargs
-        self.assertEqual(sent['model'], 'gemini-4-hydrogen')
+        self.assertEqual(sent['model'], self.model_id)
         parts = [part for turn in sent['contents'] for part in turn['parts']]
         inline = next(p['inline_data'] for p in parts if 'inline_data' in p)
         self.assertEqual(base64.b64decode(inline['data']), pdf)
@@ -211,8 +215,18 @@ class HydrogenPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.pipe._prepare_content = Gemini._prepare_content.__get__(self.pipe, Gemini)
         self.pipe._load_owui_file = AsyncMock(return_value=(None, SimpleNamespace(data={'content': 'partial text'})))
         with patch.object(self.client.aio.models, 'generate_content_stream', AsyncMock()) as stream:
-            result = await self.pipe.pipe({'model': 'gemini-4-hydrogen-ocr', 'stream': True,
+            result = await self.pipe.pipe({'model': f'{self.model_id}-ocr', 'stream': True,
                 'messages': [{'role': 'user', 'content': '전사'}]}, __metadata__={
                 '_google_gemini_bypassed_files': [{'id': 'scan', 'name': 'scan.pdf', 'content_type': 'application/pdf'}]})
         self.assertIn('OCR PDF', str(result))
         stream.assert_not_awaited()
+
+
+class NeonTests(HydrogenTests):
+    """Run the same discovery, thinking, and OCR contract for Neon."""
+    model_id = "gemini-4-neon"
+
+
+class NeonPipelineTests(HydrogenPipelineTests):
+    """Exercise Neon streaming, images, and original-PDF OCR end to end."""
+    model_id = "gemini-4-neon"
