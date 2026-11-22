@@ -4,7 +4,7 @@ author: owndev and olivier-lacroix. editied by goni5252
 author_url: https://github.com/owndev/
 project_url: https://github.com/owndev/Open-WebUI-Functions
 funding_url: https://github.com/sponsors/owndev
-version: 1.27.0
+version: 1.27.1
 required_open_webui_version: 0.9.0
 requirements: google-genai==3.3.0
 license: Apache License 2.0
@@ -674,7 +674,8 @@ class Pipe:
         )
         RETRY_COUNT: int = Field(
             default=int(os.getenv("GOOGLE_RETRY_COUNT", "2")),
-            description="Number of times to retry API calls on temporary failures",
+            ge=0, le=10,
+            description="Retries for safe text/OCR requests on 429 and server errors. Native tool workflows are not replayed.",
         )
         DEFAULT_SYSTEM_PROMPT: str = Field(
             default=os.getenv("GOOGLE_DEFAULT_SYSTEM_PROMPT", ""),
@@ -5426,7 +5427,11 @@ class Pipe:
         progress_messages=None,
         client=None,
         timing=None,
+        retry_factory=None,
+        retry_state=None,
     ):
+        if retry_factory is not None:
+            response_iterator = self._retry_stream_start(response_iterator, retry_factory, retry_state)
         started = request_started_at or time.perf_counter()
         stop = asyncio.Event()
         progress = (
@@ -5825,7 +5830,7 @@ class Pipe:
         with contextlib.suppress(Exception):
             client.close()
 
-    async def _retry_with_backoff(self, func, *args, **kwargs) -> Any:
+    async def _retry_with_backoff(self, func, *args, _retry_state=None, **kwargs) -> Any:
         """
         Retry a function with exponential backoff.
 
@@ -5840,20 +5845,27 @@ class Pipe:
             The last exception encountered after all retries
         """
         max_retries = self.valves.RETRY_COUNT
-        retry_count = 0
+        retry_state = _retry_state if _retry_state is not None else {"count": 0}
+        retry_count = retry_state["count"]
         last_exception = None
 
         while retry_count <= max_retries:
             try:
                 return await func(*args, **kwargs)
-            except ServerError as e:
-                # These errors might be temporary, so retry
+            except (ServerError, ClientError) as e:
+                if isinstance(e, ClientError) and getattr(e, "code", None) != 429:
+                    raise
+                # Retry capacity exhaustion, but never auth or invalid requests.
                 retry_count += 1
+                retry_state["count"] = retry_count
                 last_exception = e
 
                 if retry_count <= max_retries:
-                    # Calculate backoff time (exponential with jitter)
-                    wait_time = min(2**retry_count + (0.1 * retry_count), 10)
+                    # Random jitter prevents clients from retrying in lockstep.
+                    import random
+                    base = 4 if getattr(e, "code", None) == 429 else 2
+                    wait_time = min(base * (2 ** (retry_count - 1)), 30)
+                    wait_time += random.uniform(0, 1)
                     self.log.warning(
                         f"Temporary error from Google API: {e}. Retrying in {wait_time:.1f}s ({retry_count}/{max_retries})"
                     )
@@ -5867,6 +5879,38 @@ class Pipe:
         # If we get here, we've exhausted retries
         assert last_exception is not None
         raise last_exception
+
+    async def _retry_stream_start(self, response_iterator, factory, retry_state=None):
+        """Retry lazy SDK failures only before the first chunk, never replay output."""
+        iterator = response_iterator
+        first_attempt = True
+        empty = object()
+
+        async def first_chunk():
+            nonlocal iterator, first_attempt
+            if not first_attempt:
+                iterator = await factory()
+            first_attempt = False
+            try:
+                return await anext(iterator, empty)
+            except BaseException:
+                close = getattr(iterator, "aclose", None)
+                if close:
+                    with contextlib.suppress(Exception):
+                        await close()
+                raise
+
+        try:
+            chunk = await self._retry_with_backoff(first_chunk, _retry_state=retry_state)
+            if chunk is not empty:
+                yield chunk
+                async for chunk in iterator:
+                    yield chunk
+        finally:
+            close = getattr(iterator, "aclose", None)
+            if close:
+                with contextlib.suppress(Exception):
+                    await close()
 
     @staticmethod
     async def _emit_optional(emitter, event):
@@ -6689,8 +6733,11 @@ class Pipe:
                                 config=generation_config,
                             )
 
-                        response_iterator = await self._retry_with_backoff(
-                            get_streaming_response
+                        stream_retry_state = {"count": 0}
+                        response_iterator = (
+                            await get_streaming_response() if native_tools_active
+                            else await self._retry_with_backoff(
+                                get_streaming_response, _retry_state=stream_retry_state)
                         )
                         self.log.debug(f"Request {request_id}: Got streaming response")
                         stream_handed_off = True
@@ -6704,6 +6751,8 @@ class Pipe:
                             progress_messages=progress_messages,
                             client=client,
                             timing=timing,
+                            retry_factory=None if native_tools_active else get_streaming_response,
+                            retry_state=stream_retry_state,
                         )
 
                     except Exception as e:
@@ -6754,7 +6803,7 @@ class Pipe:
                         # AFC can execute a state-changing tool before a later API failure.
                         response = (
                             await get_response()
-                            if native_tools_active
+                            if native_tools_active or supports_image_generation
                             else await self._retry_with_backoff(get_response)
                         )
                     except ClientError as first_client_error:
