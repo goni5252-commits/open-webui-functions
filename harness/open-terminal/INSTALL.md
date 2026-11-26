@@ -114,13 +114,16 @@ USER user
 
 ## 5. 함수와 전체 사용자 연결
 
-`function-openai_responses.json`을 OpenWebUI 함수에 가져옵니다. 기존 Valve/API 설정을 확인하고 다음을 설정합니다.
+OpenAI Responses는 `function-openai_responses.json`, Gemini는 1.28.0 이상의 `function-google_gemini.json`을 OpenWebUI 함수에 가져옵니다. 기존 Valve/API 설정을 확인하고 사용하는 함수 각각에 다음을 설정합니다. 아래 `/opt` 경로는 이 문서의 bind mount 설치 기준이며 `/home` 영구 볼륨 등에 설치했다면 실제 경로로 바꿉니다.
 
+- `DOCUMENT_WORKFLOW_MODE=harness`: 기본 `simple` 모드에서는 하네스 자동 안내를 하지 않습니다.
 - `ENABLE_TERMINAL_HARNESS=True`: 전체 기능 연결 활성화. 이전 ENABLE_PRESENTATION_DESIGN 값은 최초 로드 시 새 설정으로 이전됩니다. 새 설정이 명시돼 있으면 새 값이 우선합니다.
 - `TERMINAL_HARNESS_ROOT=/opt/openwebui-harness`
 - `TERMINAL_HARNESS_ENTRYPOINT=AGENTS.md`
 - `TERMINAL_HARNESS_SITE_ROOT=/opt/openwebui-site`
 - `COMPACT_STATUS_UPDATES=True`: 짧은 진행 표시. False이면 상세 도구 상태를 표시하되 created/in_progress 중복은 제거됩니다.
+
+`COMPACT_STATUS_UPDATES`와 이전 설정 마이그레이션은 OpenAI Responses 전용입니다. 학교 site가 없으면 `TERMINAL_HARNESS_SITE_ROOT`는 비워 둡니다. Gemini에는 Open Terminal과 native 도구 호출을 활성화합니다. Gemini는 별도 `get_terminal_harness` 도구 없이 기존 Terminal에서 AGENTS/catalog를 읽을 명령을 안내하고, 관련 활성 스킬만 읽도록 합니다. OCR·이미지 생성·백그라운드·검색 전용 호출에는 하네스 안내를 추가하지 않습니다.
 
 Open Terminal 연결을 선택하고 새 요청으로 시험합니다. 기존 대화에 이미 저장된 중복 상태는 지우지 않습니다. 별도 PPT 스킬이 강제 템플릿을 지정한다면 그 설정도 사용자의 디자인 요청과 충돌하지 않도록 조정하세요.
 

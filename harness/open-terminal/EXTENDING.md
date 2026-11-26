@@ -33,4 +33,4 @@ site의 AGENTS.md는 학교 공통 보완 규칙이며 개인 홈의 AGENTS.md�
 
 경로는 해당 catalog가 있는 root 기준 상대 경로이며 외부 경로·외부로 향하는 심볼릭 링크는 허용하지 않습니다. 공통 템플릿 파일이 없으면 검증이 실패합니다. 새 기능을 위한 별도 API 키/패키지/권한은 관리자가 준비해야 하며 catalog 등록이 권한을 부여하지 않습니다.
 
-다른 모델/함수에도 사용하려면 해당 모델의 관리 지침에서 같은 core/AGENTS.md와 catalog 명령을 읽도록 연결해야 합니다. 이번 자동 연결은 OpenAI Responses 함수에 적용됩니다.
+OpenAI Responses와 Google Gemini(1.28.0 이상)는 `DOCUMENT_WORKFLOW_MODE=harness`, `ENABLE_TERMINAL_HARNESS=True`와 실제 `TERMINAL_HARNESS_ROOT`를 설정하면 같은 공통 지침을 연결합니다. Gemini는 실행 가능한 native Terminal 도구가 제공되는 호출에 읽기 명령을 안내합니다. 다른 함수는 같은 core/AGENTS.md와 catalog를 읽도록 별도 연결해야 합니다.
