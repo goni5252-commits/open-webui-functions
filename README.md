@@ -4,7 +4,7 @@ OpenWebUI에서 대화, 이미지 생성, 한글 OCR과 문서 내보내기를 �
 
 | 함수 | 버전 | 간단한 설명 | 다운로드 |
 |---|---|---|---|
-| OpenAI Responses | 1.9.4 | 자동 모델 선택, 이미지 생성·편집, PDF/OCR, Terminal 문서 제작 | [JSON](function-openai_responses.json) |
+| OpenAI Responses | 1.9.5 | 자동 모델 선택, 이미지 생성·편집, PDF/OCR, Terminal 문서 제작 | [JSON](function-openai_responses.json) |
 | Google Gemini | 1.27.1 | Hydrogen·Neon 자동 추론·이미지 생성·한글 OCR | [JSON](function-google_gemini.json) |
 | Gemini RAG Bypass | 1.0.1 | 백엔드 RAG 검색을 우회하고 첨부 원본을 Gemini에 전달하는 필터 | [JSON](function-google_gemini_rag_bypass.json) |
 | EXAONE Auto | 1.0.0 | K-EXAONE 2.5 텍스트 대화의 low/high/max 자동 추론 선택 | [JSON](function-exaone_auto.json) |
@@ -35,6 +35,7 @@ OpenWebUI에서 대화, 이미지 생성, 한글 OCR과 문서 내보내기를 �
 
 ## OpenAI · EXAONE
 
+- OpenAI는 최신 `base_user_prompt`와 기존 `user_prompt`를 지원합니다. `Logs`의 `Tool diagnostics`, `Tool execution`, `File display diagnostics`에서 도구 전달·호출·파일 표시 단계를 확인할 수 있습니다. 진단에는 도구 인수나 파일 내용을 기록하지 않습니다.
 - OpenAI는 OpenWebUI의 `machine` 도구·프록시·파일 표시 이벤트를 지원하고 기존 `terminal` 연동도 유지합니다.
 
 - OpenAI는 대화 기록의 `content: null` 메시지를 빈 내용으로 처리하며, 요청 실패 시 서버 로그에 traceback을 남깁니다.

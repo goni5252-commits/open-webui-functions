@@ -5,7 +5,7 @@ author: originally written by jrkropp, editted by woogon kim
 git_url: https://github.com/jrkropp/open-webui-developer-toolkit/blob/main/functions/pipes/openai_responses_manifold/openai_responses_manifold.py
 description: OpenAI Responses 기반 대화, 자동 모델 선택, 이미지·PDF·OCR 및 Terminal 문서 제작을 지원합니다.
 required_open_webui_version: 0.11.0
-version: 1.9.4
+version: 1.9.5
 license: MIT
 """
 
@@ -1469,6 +1469,17 @@ class Pipe:
         # Responses tool construction until smart model routing is complete.
         __tools__ = await __tools__ if inspect.isawaitable(__tools__) else __tools__
         owui_tool_registry = _normalize_owui_tool_registry(__tools__)
+        terminal_names = sorted(name for name, tool in owui_tool_registry.items() if _is_terminal_tool(tool))
+        self.logger.info("Tool diagnostics: registry=%d terminal=%s selected=%s prompt_source=%s",
+                         len(owui_tool_registry), ",".join(terminal_names) or "none",
+                         bool(__metadata__.get("machine_id") or __metadata__.get("terminal_id")),
+                         "base_user_prompt" if __metadata__.get("base_user_prompt") else
+                         "user_prompt" if __metadata__.get("user_prompt") else "messages")
+        if (__metadata__.get("machine_id") or __metadata__.get("terminal_id")) and not terminal_names:
+            self.logger.warning("Selected machine has no Terminal tools in the Pipe registry")
+            await __event_emitter__({"type": "status", "data": {
+                "description": "선택된 작업실의 Terminal 도구가 함수에 전달되지 않았습니다.", "done": True}})
+            responses_body.instructions = (responses_body.instructions or "") + "\nNo Terminal tools were supplied to this request. Do not claim to execute Terminal commands, edit files or display Terminal files. Explain this limitation for tasks requiring them."
         # WebUI resolves workspace models to their base in body; metadata may
         # retain an unrelated custom ID. Keep metadata intact for chat history.
         orig_model_norm = ModelFamily._norm(str(body.get("model", "") or openwebui_model_id))
@@ -1490,7 +1501,7 @@ class Pipe:
                 valves=valves,
                 event_emitter=__event_emitter__,
                 public_alias=orig_model_norm,
-                user_prompt=__metadata__.get("user_prompt") or _extract_last_user_text(body.get("messages", [])),
+                user_prompt=_original_user_prompt(__metadata__, body.get("messages", [])),
                 routing_hint=(__metadata__.get("_native_hwpx_stats") if isinstance(__metadata__, dict) else None),
             )
             # Cross-turn encrypted reasoning is model-specific enough that a smart
@@ -1533,6 +1544,8 @@ class Pipe:
             extra_tools=getattr(completions_body, "extra_tools", None),
         )
 
+        self.logger.info("Tool diagnostics: advertised_functions=%s",
+                         ",".join(t.get("name", "") for t in tools if t.get("type") == "function") or "none")
         # Fixed-base auto aliases keep their base model constant and choose only effort.
         if ModelFamily.is_auto_reasoning(orig_model_norm):
             fixed_router = (
@@ -1896,6 +1909,7 @@ class Pipe:
                     await self._emit_completion(event_emitter, content="", usage=total_usage, done=False)
                 # Execute tool calls (if any), persist results (if valve enabled), and append to body.input.
                 calls = [i for i in final_response["output"] if i["type"] == "function_call"]
+                self.logger.info("Tool diagnostics: response_function_calls=%s", ",".join(c["name"] for c in calls) or "none")
                 if calls:
                     function_outputs = await self._execute_function_calls(calls, tools)
                     for tool in tools.values():
@@ -3015,7 +3029,7 @@ class Pipe:
 
         original_prompt = ""
         if valves.HWPX_USE_ORIGINAL_USER_PROMPT:
-            original_prompt = str(metadata.get("user_prompt") or "").strip()
+            original_prompt = _original_user_prompt(metadata, [])
         if not original_prompt and isinstance(responses_body.input, list):
             for item in reversed(responses_body.input):
                 if isinstance(item, dict) and item.get("role") == "user":
@@ -3162,7 +3176,7 @@ class Pipe:
         """
         user_prompt = ""
         if valves.OCR_USE_ORIGINAL_USER_PROMPT:
-            user_prompt = str(metadata.get("user_prompt") or "").strip()
+            user_prompt = _original_user_prompt(metadata, [])
         if not user_prompt:
             # Fall back to the latest user text from already-transformed input.
             if isinstance(responses_body.input, list):
@@ -3705,7 +3719,17 @@ class Pipe:
                 return fn(**args)
             else:
                 return asyncio.to_thread(fn, **args)
-        tasks   = [_make_task(call) for call in calls]
+        async def run(call):
+            logger = logging.getLogger(__name__)
+            logger.info("Tool execution started: %s", call["name"])
+            try:
+                result = await _make_task(call)
+            except Exception as exc:
+                logger.error("Tool execution raised: %s (%s)", call["name"], type(exc).__name__)
+                raise
+            logger.info("Tool execution returned: %s", call["name"])
+            return result
+        tasks   = [run(call) for call in calls]
         results = await asyncio.gather(*tasks)
         return [
             {
@@ -5034,6 +5058,14 @@ def _compact_classifier_input(messages):
     return compact
 
 
+def _original_user_prompt(metadata, messages):
+    """Current OWUI stores pre-retrieval text under base_user_prompt."""
+    for key in ("base_user_prompt", "user_prompt"):
+        value = (metadata or {}).get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return _extract_last_user_text(messages)
+
 def _extract_last_user_text(
     input_data: Union[str, List[Dict[str, Any]]],
 ) -> str:
@@ -5712,8 +5744,8 @@ class _TerminalBridge:
             if builder:
                 try:
                     structured = builder(name, args, copy.deepcopy(raw), tool, metadata)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logging.getLogger(__name__).warning("File result builder failed (%s)", type(exc).__name__)
             if not structured:
                 # Same selector contract as 0.11.4; no invented URL or raw HTTP call.
                 import mimetypes
@@ -5750,10 +5782,15 @@ class _TerminalBridge:
                     self.context.get("__request__"), name, copy.deepcopy(processed),
                     tool.get("type", "terminal" if terminal_tool else ""), **processor_kwargs,
                 )
-            except Exception:
+            except Exception as exc:
+                logging.getLogger(__name__).warning("Tool result processor failed: %s (%s)", name, type(exc).__name__)
                 processed = structured if structured is not None else raw
         else:
             processed = structured if structured is not None else raw
+        if name == "display_file":
+            logging.getLogger(__name__).info(
+                "File display diagnostics: terminal=%s raw_type=%s failed=%s structured=%s files=%d embeds=%d",
+                terminal_tool, type(raw).__name__, failed, structured is not None, len(files), len(embeds))
         text = processed if isinstance(processed, str) else json.dumps(processed, ensure_ascii=False, default=str)
         # UI metadata belongs only in the UI output, never the OpenAI request.
         visualization = name == "render_visualization" and tool.get("type") == "builtin"
@@ -5780,7 +5817,8 @@ class _TerminalBridge:
             if handler:
                 try:
                     await handler(name, args, text, self.emit)
-                except Exception:
+                except Exception as exc:
+                    logging.getLogger(__name__).warning("Terminal UI event failed: %s (%s)", name, type(exc).__name__)
                     # A UI failure must not cause a successful tool to execute again.
                     pass
             else:
