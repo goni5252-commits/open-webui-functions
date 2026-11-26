@@ -4,7 +4,7 @@ author: owndev and olivier-lacroix. editied by goni5252
 author_url: https://github.com/owndev/
 project_url: https://github.com/owndev/Open-WebUI-Functions
 funding_url: https://github.com/sponsors/owndev
-version: 1.27.1
+version: 1.27.2
 required_open_webui_version: 0.9.0
 requirements: google-genai==3.3.0
 license: Apache License 2.0
@@ -5230,6 +5230,62 @@ class Pipe:
         filtered_params = {k: v for k, v in gen_config_params.items() if v is not None}
         return types.GenerateContentConfig(**filtered_params)
 
+    async def _recover_file_delivery(self, client, model_id, contents, config, response, bridge):
+        """One bounded delivery-only continuation; never replay generation tools."""
+        if not bridge or not bridge.needs_delivery() or self._get_safety_block_message(response):
+            return response
+        candidates = getattr(response, "candidates", None) or []
+        content = getattr(candidates[0], "content", None) if candidates else None
+        if not content or any(getattr(p, "function_call", None) for p in (content.parts or [])):
+            return response
+        # AFC history contains completed tool results and signed model parts.
+        history = list(getattr(response, "automatic_function_calling_history", None) or contents)
+        history += [content, types.Content(role="user", parts=[types.Part(text=(
+            "Before finishing, deliver only the verified final output files from the completed tool history. "
+            "Use deliver_terminal_files once. If no final file was requested or no verified final path exists, "
+            "pass paths=[]. Never guess paths or deliver source, temporary, script or log files."))])]
+        recovery = config.model_copy(deep=True)
+        recovery.tools = [types.Tool(function_declarations=[types.FunctionDeclaration(
+            name="deliver_terminal_files", description="Deliver verified final output files only; [] if none.",
+            parameters_json_schema={"type": "object", "properties": {"paths": {
+                "type": "array", "items": {"type": "string"}, "maxItems": 10}}, "required": ["paths"]})])]
+        recovery.automatic_function_calling = types.AutomaticFunctionCallingConfig(disable=True)
+        recovery.tool_config = types.ToolConfig(function_calling_config=types.FunctionCallingConfig(
+            mode="ANY", allowed_function_names=["deliver_terminal_files"]))
+        options = recovery.http_options or types.HttpOptions()
+        extra = dict(options.extra_body or {})
+        extra.pop("toolConfig", None)
+        extra.pop("tool_config", None)
+        recovery.http_options = options.model_copy(update={"extra_body": extra or None,
+            "retry_options": types.HttpRetryOptions(attempts=1)})
+        selected = await client.aio.models.generate_content(model=model_id, contents=history, config=recovery)
+        candidates = getattr(selected, "candidates", None) or []
+        selected_content = getattr(candidates[0], "content", None) if candidates else None
+        if self._get_safety_block_message(selected) or not selected_content:
+            return selected
+        replies = []
+        executed = False
+        for part in selected_content.parts or []:
+            call = getattr(part, "function_call", None)
+            if not call:
+                continue
+            result = {"error": "Not executed: only one final file delivery is permitted."}
+            if call.name == "deliver_terminal_files" and not executed:
+                executed = True
+                result = json.loads(await bridge.deliver_files((call.args or {}).get("paths")))
+            payload = {"name": call.name, "response": result}
+            if getattr(call, "id", None):
+                payload["id"] = call.id
+            replies.append(types.Part(function_response=types.FunctionResponse(**payload)))
+        if not replies:
+            return selected
+        recovery.tools = None
+        recovery.tool_config = None
+        recovery.system_instruction = str(config.system_instruction or "") + (
+            "\nFinish from actual tool results. Do not claim failed file delivery succeeded. No more tool calls.")
+        return await client.aio.models.generate_content(model=model_id,
+            contents=history + [selected_content, types.Content(role="user", parts=replies)], config=recovery)
+
     async def _finalize_pending_tools(self, client, model_id, contents, config, response):
         """One text-only continuation; pending calls are explicitly NOT executed.
 
@@ -6194,6 +6250,10 @@ class Pipe:
                 if isinstance(tool, dict) else tool
                 for name, tool in __tools__.items()
             }
+            delivery_tools = bridge.delivery_tools(__tools__)
+            if set(delivery_tools) & set(__tools__):
+                raise ValueError("Reserved tool name: deliver_terminal_files")
+            __tools__.update(delivery_tools)
             __event_emitter__ = bridge.emit
         result = await self._conversation_pipe_impl(body, metadata, __event_emitter__, __tools__,
                                                      __request__, __user__, holder)
@@ -6614,6 +6674,10 @@ class Pipe:
                     explicit_reasoning_effort,
                 )
 
+            delivery_bridge = next((tool.get("_file_delivery") for tool in (__tools__ or {}).values()
+                                    if isinstance(tool, dict) and tool.get("_file_delivery")), None)
+            if delivery_bridge:
+                system_instruction = (system_instruction or "") + "\n" + delivery_bridge.DELIVERY_POLICY
             if image_session:
                 system_instruction = (system_instruction or "") + "\n" + image_session.policy()
 
@@ -6643,7 +6707,7 @@ class Pipe:
             if (
                 stream
                 and (hwpx_after_search or native_tools_active or image_session is not None)
-                and (hwpx_after_search or self.valves.NATIVE_TOOL_STREAMING_SAFE_MODE or image_session is not None)
+                and (hwpx_after_search or self.valves.NATIVE_TOOL_STREAMING_SAFE_MODE or image_session is not None or delivery_bridge is not None)
                 and not supports_image_generation
             ):
                 self.log.info(
@@ -6920,6 +6984,8 @@ class Pipe:
                             response = await client.aio.models.generate_content(
                                 model=model_id, contents=contents, config=tool_config)
                     if not supports_image_generation:
+                        response = await self._recover_file_delivery(
+                            client, model_id, contents, generation_config, response, delivery_bridge)
                         response = await self._finalize_pending_tools(
                             client, model_id, contents, generation_config, response)
                     self.log.debug(f"Request {request_id}: Got non-streaming response")
@@ -7426,9 +7492,10 @@ async def _maybe_await(value):
 def _is_terminal_tool(tool):
     """Use OWUI provenance, never a function name shared by Workspace/MCP tools."""
     return bool(
-        tool.get("type") == "terminal"
-        or str(tool.get("tool_id", "")).startswith("terminal:")
+        tool.get("type") in ("machine", "terminal")
+        or str(tool.get("tool_id", "")).startswith(("machine:", "terminal:"))
         or (tool.get("server") or {}).get("is_terminal") is True
+        or (tool.get("server") or {}).get("is_machine") is True
     )
 
 
@@ -7449,6 +7516,74 @@ class _TerminalBridge:
         self.output = []
         self.text = ""
         self.usage = None
+        self.file_cards = {}
+        self.displayed_calls = set()
+        self.terminal_work = False
+        self.delivery_attempted = False
+        self.display_tool = None
+
+    DELIVERY_POLICY = """When the user requests a file to be created or edited, deliver the verified
+final output through deliver_terminal_files before your final answer, even if the user
+never mentions display_file. Wait for background processes to finish and verify the exact
+absolute output paths in Terminal first. Supply only final deliverables, not originals, temporary
+files, scripts or logs. This tool calls Terminal display_file and renders download cards.
+Existing direct display_file calls also deliver files; do not display the same output
+again merely to comply with this policy. Never claim delivery if the tool fails.
+For ordinary Terminal inspection with no requested output file, do not deliver files.
+"""
+
+    def delivery_tools(self, registry):
+        tool = registry.get("display_file")
+        if not tool or not _is_terminal_tool(tool):
+            return {}
+        self.display_tool = tool
+        return {"deliver_terminal_files": {
+            "callable": self.deliver_files, "_file_delivery": self,
+            "spec": {"name": "deliver_terminal_files",
+                "description": "Deliver only requested final files created or edited through Terminal. Verifies each with display_file and shows a download card. Exclude source/temporary files. Empty paths means no final deliverable.",
+                "parameters": {"type": "object", "properties": {
+                    "paths": {"type": "array", "description": "Exact absolute paths of final output files, verified with Terminal after all background processes finish. No shell quotes, file:// URLs or guessed paths. Use [] when no final file exists.", "items": {"type": "string"}, "maxItems": 10}},
+                    "required": ["paths"], "additionalProperties": False}}}}
+
+    def needs_delivery(self):
+        return self.terminal_work and not self.file_cards and not self.delivery_attempted
+
+    async def deliver_files(self, paths):
+        from uuid import uuid4
+        self.delivery_attempted = True
+        if not isinstance(paths, list) or len(paths) > 10 or any(not isinstance(p, str) or not p.strip() for p in paths):
+            return json.dumps({"ok": False, "error": "최종 파일 경로를 최대 10개 지정해 주세요."}, ensure_ascii=False)
+        delivered, errors = [], []
+        for path in dict.fromkeys(paths):
+            call = {"name": "display_file", "call_id": "delivery-" + uuid4().hex,
+                    "arguments": json.dumps({"path": path})}
+            try:
+                result = await self.execute(call, self.display_tool)
+                if call["call_id"] not in self.displayed_calls:
+                    # Preserve the same evidence a direct display_file caller sees.
+                    # In particular, exists=False is a path problem, not a transport exception.
+                    try:
+                        detail = json.loads(result)
+                    except (TypeError, ValueError):
+                        detail = result
+                    code = "file_not_found" if isinstance(detail, dict) and detail.get("exists") is False else "display_failed"
+                    errors.append({"path": path, "code": code, "tool_result": detail})
+                    continue
+                delivered.append(path)
+            except Exception as exc:
+                errors.append({"path": path, "code": "display_exception", "error": type(exc).__name__,
+                               "detail": str(exc)})
+        if errors:
+            await self.emit({"type": "status", "data": {
+                "description": "일부 최종 파일을 표시하지 못했습니다. 다운로드 완료로 처리하지 마세요.", "done": True}})
+        return json.dumps({"ok": not errors, "delivered": delivered, "errors": errors,
+                           "instruction": (
+                               "Delivery failed for the paths in errors. Inspect tool_result and its resolved path/exists/error. "
+                               "Check the exact absolute output path with Terminal and confirm background generation has finished. "
+                               "Do not recreate or modify the file merely to retry delivery. Retry only a verified corrected path "
+                               "or after the producing process finishes. Do not claim missing files were created or validated."
+                               if errors else
+                               "Cards are rendered by the application. Do not call display_file again for the same delivery.")}, ensure_ascii=False)
 
     def snapshot(self):
         return [*self.output, {
@@ -7548,25 +7683,30 @@ class _TerminalBridge:
                 raw = json.loads(raw)
             except (TypeError, ValueError):
                 pass
+        if terminal_tool and name in {"run_command", "write_file", "replace_file_content"}:
+            self.terminal_work = True
         failed = isinstance(raw, dict) and (
             raw.get("exists") is False or bool(raw.get("error"))
             or raw.get("success") is False or raw.get("ok") is False
             or raw.get("status") in ("error", "failed")
         )
         structured = None
-        builder = _terminal_helper(middleware, "build_terminal_file_tool_result")
+        builder = (
+            _terminal_helper(middleware, "build_machine_file_tool_result")
+            or _terminal_helper(middleware, "build_terminal_file_tool_result")
+        )
         if terminal_tool and name == "display_file" and isinstance(raw, dict) and not failed:
             if builder:
                 try:
                     structured = builder(name, args, copy.deepcopy(raw), tool, metadata)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logging.getLogger(__name__).warning("File result builder failed (%s)", type(exc).__name__)
             if not structured:
                 # Same selector contract as 0.11.4; no invented URL or raw HTTP call.
                 import mimetypes
                 import os
-                terminal_id = metadata.get("terminal_id")
-                if str(tool.get("tool_id", "")).startswith("terminal:"):
+                terminal_id = metadata.get("machine_id", metadata.get("terminal_id"))
+                if str(tool.get("tool_id", "")).startswith(("machine:", "terminal:")):
                     terminal_id = tool["tool_id"].split(":", 1)[1]
                 url = (tool.get("server") or {}).get("url")
                 path = raw.get("path") or args.get("path")
@@ -7574,11 +7714,12 @@ class _TerminalBridge:
                     mime = raw.get("mime_type") or raw.get("content_type") or mimetypes.guess_type(path)[0] or "application/octet-stream"
                     structured = {**raw, "type": "file", "source": "open_terminal",
                         "terminal_selector": terminal_id or url,
+                        "machine_selector": terminal_id or url,
                         "session_id": metadata.get("chat_id"), "path": path,
                         "full_path": raw.get("full_path") or path,
                         "name": raw.get("name") or os.path.basename(path),
                         "mime_type": mime, "content_type": mime,
-                        **({"terminal_id": terminal_id} if terminal_id else {"terminal_url": url}),
+                        **({"terminal_id": terminal_id, "machine_id": terminal_id} if terminal_id else {"terminal_url": url, "machine_url": url}),
                         **({"displayed": True} if args.get("inline") is True else {}),
                         **({"page": args["page"]} if args.get("page") else {}),
                     }
@@ -7587,8 +7728,8 @@ class _TerminalBridge:
         processor = _terminal_helper(middleware, "process_tool_result")
         if processor:
             try:
-                # 0.13.4 omits the older direct_tool argument. Inspect before
-                # calling so processor side effects are never retried.
+                # 0.13 removed the positional `direct` argument. Inspect first;
+                # retrying after TypeError could duplicate processor side effects.
                 processor_kwargs = {"metadata": metadata, "user": self.context.get("__user__")}
                 if "direct_tool" in inspect.signature(processor).parameters:
                     processor_kwargs["direct_tool"] = direct
@@ -7596,45 +7737,75 @@ class _TerminalBridge:
                     self.context.get("__request__"), name, copy.deepcopy(processed),
                     tool.get("type", "terminal" if terminal_tool else ""), **processor_kwargs,
                 )
-            except Exception:
+            except Exception as exc:
+                logging.getLogger(__name__).warning("Tool result processor failed: %s (%s)", name, type(exc).__name__)
                 processed = structured if structured is not None else raw
         else:
             processed = structured if structured is not None else raw
+        if name == "display_file":
+            logging.getLogger(__name__).info(
+                "File display diagnostics: terminal=%s raw_type=%s failed=%s structured=%s files=%d embeds=%d exists=%s error_present=%s",
+                terminal_tool, type(raw).__name__, failed, structured is not None, len(files), len(embeds),
+                raw.get("exists") if isinstance(raw, dict) else None,
+                bool(raw.get("error")) if isinstance(raw, dict) else False)
         text = processed if isinstance(processed, str) else json.dumps(processed, ensure_ascii=False, default=str)
-        # The visualization renderer reads HTML from the call arguments and
-        # enables execution only for a completed {"status": "accepted"} result.
-        # Keep the renderer output separate from the SDK's function response.
+        # UI metadata belongs only in the UI output, never the OpenAI request.
         visualization = name == "render_visualization" and tool.get("type") == "builtin"
+        duplicate_card = False
         if structured is not None or files or embeds or visualization:
-            self.output.extend([
+            card_key = None
+            if name == "display_file" and structured is not None and not failed:
+                import posixpath
+                selector = structured.get("machine_selector") or structured.get("terminal_selector") or tool.get("tool_id")
+                path = structured.get("full_path") or structured.get("path")
+                if selector and path:
+                    card_key = (str(selector), posixpath.normpath(path))
+                    self.displayed_calls.add(call["call_id"])
+            pair = [
                 {"type": "function_call", "id": call.get("id", call["call_id"]),
                  "call_id": call["call_id"], "name": name, "arguments": call["arguments"], "status": "completed"},
                 {"type": "function_call_output", "call_id": call["call_id"],
                  "id": "terminal-result-" + call["call_id"], "status": "completed",
                  "output": [{"type": "input_text", "text": text}],
                  **({"files": files} if files else {}), **({"embeds": embeds} if embeds else {})},
-            ])
+            ]
+            if card_key in self.file_cards:
+                index = self.file_cards[card_key]
+                self.output[index:index + 2] = pair
+                duplicate_card = True
+            else:
+                if card_key is not None:
+                    self.file_cards[card_key] = len(self.output)
+                self.output.extend(pair)
             await self.emit({"type": "chat:completion", "data": {"done": False}})
-        handler = _terminal_helper(middleware, "terminal_event_handler")
+        handler = (
+            _terminal_helper(middleware, "machine_event_handler")
+            or _terminal_helper(middleware, "terminal_event_handler")
+        )
         event_ok = not failed and not (
             isinstance(raw, str) and raw.lstrip().lower().startswith(("error", "exception", "traceback"))
         )
         if name == "display_file" and not isinstance(raw, dict):
             event_ok = False
-        if terminal_tool and event_ok:
+        if terminal_tool and event_ok and not duplicate_card:
             if handler:
                 try:
                     await handler(name, args, text, self.emit)
-                except Exception:
+                except Exception as exc:
+                    logging.getLogger(__name__).warning("Terminal UI event failed: %s (%s)", name, type(exc).__name__)
                     # A UI failure must not cause a successful tool to execute again.
                     pass
             else:
+                event_prefix = "machine:" if (
+                    "machine_id" in metadata
+                    or str(tool.get("tool_id", "")).startswith("machine:")
+                ) else "terminal:"
                 path = (raw.get("path") if isinstance(raw, dict) else None) or args.get("path")
                 if name == "run_command":
-                    await self.emit({"type": "terminal:run_command", "data": {}})
+                    await self.emit({"type": event_prefix + "run_command", "data": {}})
                 elif path and name in ("display_file", "write_file", "replace_file_content"):
                     if name != "display_file" or args.get("inline") is not True:
-                        await self.emit({"type": "terminal:" + name, "data": {
+                        await self.emit({"type": event_prefix + name, "data": {
                             "path": path, **({"page": args["page"]} if args.get("page") else {}),
                         }})
         return text

@@ -5,7 +5,7 @@ OpenWebUI에서 대화, 이미지 생성, 한글 OCR과 문서 내보내기를 �
 | 함수 | 버전 | 간단한 설명 | 다운로드 |
 |---|---|---|---|
 | OpenAI Responses | 1.9.7 | 자동 모델 선택, 이미지 생성·편집, PDF/OCR, Terminal 문서 제작 | [JSON](function-openai_responses.json) |
-| Google Gemini | 1.27.1 | Hydrogen·Neon 자동 추론·이미지 생성·한글 OCR | [JSON](function-google_gemini.json) |
+| Google Gemini | 1.27.2 | Hydrogen·Neon 자동 추론·이미지 생성·한글 OCR | [JSON](function-google_gemini.json) |
 | Gemini RAG Bypass | 1.0.1 | 백엔드 RAG 검색을 우회하고 첨부 원본을 Gemini에 전달하는 필터 | [JSON](function-google_gemini_rag_bypass.json) |
 | EXAONE Auto | 1.0.0 | K-EXAONE 2.5 텍스트 대화의 low/high/max 자동 추론 선택 | [JSON](function-exaone_auto.json) |
 | 한글 문서 내보내기 | 3.4.0 | 답변의 표·수식·이미지 등을 HWPX로 저장 | [JSON](function-한글문서_내보내기.json) |
@@ -33,9 +33,9 @@ OpenWebUI에서 대화, 이미지 생성, 한글 OCR과 문서 내보내기를 �
 
 자동 판단에는 별도 분류 API 호출이 없습니다. 실제 추론·이미지 생성·검색에는 시간과 비용이 들며, OCR 정확도와 응답 속도를 보장하지 않습니다.
 
-## OpenAI · EXAONE
+## 파일 전달 · OpenAI · EXAONE
 
-- OpenAI의 최종 파일은 `deliver_terminal_files`가 Terminal `display_file`로 확인하여 전달합니다. 같은 작업실·같은 경로의 카드는 현재 응답 안에서 최신 결과 하나로 갱신합니다. Terminal 작업 후 카드 없이 응답을 끝내려 하면 호출 횟수 한도 내에서 한 차례 전달 보완을 시도합니다. 이때 추가 모델 호출이 발생할 수 있으며, 원본·스크립트·중간 파일은 최종 산출물에서 제외하도록 안내합니다. 표시 실패 시 원래 도구 결과와 파일 존재 여부를 모델에 전달하여 경로·백그라운드 작업 완료 상태를 확인하게 합니다. 실패를 성공으로 처리하지 않습니다.
+- OpenAI와 Gemini의 최종 파일은 `deliver_terminal_files`가 Terminal `display_file`로 확인하여 전달합니다. 같은 작업실·같은 경로의 카드는 현재 응답 안에서 최신 결과 하나로 갱신합니다. Terminal 작업 후 카드 없이 응답을 끝내려 하면 호출 횟수 한도 내에서 한 차례 전달 보완을 시도합니다. Gemini 보완 단계는 전달 전용 호출과 최종 답변 호출로 제한하며 생성 명령을 재실행하지 않습니다. Gemini의 Terminal 파일 전달 도구가 활성화되면 안정적인 결과 수집을 위해 비스트리밍으로 처리합니다. 이때 추가 모델 호출이 발생할 수 있으며, 원본·스크립트·중간 파일은 최종 산출물에서 제외하도록 안내합니다. 표시 실패 시 원래 도구 결과와 파일 존재 여부를 모델에 전달하여 경로·백그라운드 작업 완료 상태를 확인하게 합니다. 실패를 성공으로 처리하지 않습니다.
 
 - OpenAI는 최신 `base_user_prompt`와 기존 `user_prompt`를 지원합니다. `Logs`의 `Tool diagnostics`, `Tool execution`, `File display diagnostics`에서 도구 전달·호출·파일 표시 단계를 확인할 수 있습니다. 진단에는 도구 인수나 파일 내용을 기록하지 않습니다.
 - OpenAI는 OpenWebUI의 `machine` 도구·프록시·파일 표시 이벤트를 지원하고 기존 `terminal` 연동도 유지합니다.
