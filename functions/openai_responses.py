@@ -5,7 +5,7 @@ author: originally written by jrkropp, editted by woogon kim
 git_url: https://github.com/jrkropp/open-webui-developer-toolkit/blob/main/functions/pipes/openai_responses_manifold/openai_responses_manifold.py
 description: OpenAI Responses 기반 대화, 자동 모델 선택, 이미지·PDF·OCR 및 Terminal 문서 제작을 지원합니다.
 required_open_webui_version: 0.11.0
-version: 1.9.5
+version: 1.9.6
 license: MIT
 """
 
@@ -1336,6 +1336,11 @@ class Pipe:
                     if name in resolved:
                         raise ValueError(f"하네스 도구 이름이 기존 도구와 충돌합니다: {name}")
                     resolved[name] = tool
+            if bridge and not __task__:
+                delivery_tools = bridge.delivery_tools(registry)
+                if set(delivery_tools) & set(resolved or {}):
+                    raise ValueError("최종 파일 전달 도구 이름 충돌")
+                resolved = {**(resolved or {}), **delivery_tools}
             result = await self._pipe_impl(
                 body, __user__, __request__, relay, __event_call__, __metadata__, resolved,
                 __files__, __task__, __task_body__,
@@ -1521,6 +1526,8 @@ class Pipe:
         if any(tool.get("_attachment_transfer") for tool in owui_tool_registry.values()):
             responses_body.instructions = (responses_body.instructions or "") + "\n" + _TerminalAttachmentTransfer.POLICY
 
+        if any(t.get("_file_delivery") for t in owui_tool_registry.values()):
+            responses_body.instructions = (responses_body.instructions or "") + "\n" + _TerminalBridge.DELIVERY_POLICY
         workflow_policy = _document_workflow_policy(valves, owui_tool_registry, __task__)
         if workflow_policy:
             responses_body.instructions = (responses_body.instructions or "") + "\n" + workflow_policy
@@ -1656,6 +1663,9 @@ class Pipe:
         Stream assistant responses incrementally, handling function calls, status updates, and tool usage.
         """
         tools = tools or {}
+        delivery = next((t.get("_file_delivery") for t in tools.values() if t.get("_file_delivery")), None)
+        delivery_recovery = False
+        previous_tool_choice = body.tool_choice
         openwebui_model = metadata.get("model", {}).get("id", "")
         assistant_message = ""
         total_usage: dict[str, Any] = {}
@@ -1912,6 +1922,8 @@ class Pipe:
                 self.logger.info("Tool diagnostics: response_function_calls=%s", ",".join(c["name"] for c in calls) or "none")
                 if calls:
                     function_outputs = await self._execute_function_calls(calls, tools)
+                    if delivery_recovery:
+                        body.tool_choice = previous_tool_choice
                     for tool in tools.values():
                         images = tool.get("_conversation_images")
                         if images:
@@ -1948,6 +1960,16 @@ class Pipe:
                             )
                     body.input.extend(function_outputs)
                 else:
+                    if delivery and delivery.needs_delivery() and not delivery_recovery and loop_idx + 2 < valves.MAX_FUNCTION_CALL_LOOPS:
+                        delivery_recovery = True
+                        body.tool_choice = {"type": "function", "name": "deliver_terminal_files"}
+                        body.input.append({"role": "developer", "content": [{"type": "input_text", "text":
+                            "Before ending, call deliver_terminal_files with ONLY the final deliverables requested by the user "
+                            "and created/edited in the actual Terminal tool history. Exclude source attachments, scripts, logs, "
+                            "temporary files and unrelated files. Do not infer a file exists from your prose. "
+                            "Use paths=[] if the task produced no final deliverable or failed. Do not repeat creation commands."}]})
+                        self.logger.info("Final file delivery: running one recovery pass")
+                        continue
                     break
         # Catch any exceptions during the streaming loop and emit an error
         except Exception as e:  # pragma: no cover - network errors
@@ -5631,6 +5653,58 @@ class _TerminalBridge:
         self.output = []
         self.text = ""
         self.usage = None
+        self.file_cards = {}
+        self.displayed_calls = set()
+        self.terminal_work = False
+        self.delivery_attempted = False
+        self.display_tool = None
+
+    DELIVERY_POLICY = """When the user requests a file to be created or edited, deliver the verified
+final output through deliver_terminal_files before your final answer, even if the user
+never mentions display_file. Supply only final deliverables, not originals, temporary
+files, scripts or logs. This tool calls Terminal display_file and renders download cards.
+Existing direct display_file calls also deliver files; do not display the same output
+again merely to comply with this policy. Never claim delivery if the tool fails.
+For ordinary Terminal inspection with no requested output file, do not deliver files.
+"""
+
+    def delivery_tools(self, registry):
+        tool = registry.get("display_file")
+        if not tool or not _is_terminal_tool(tool):
+            return {}
+        self.display_tool = tool
+        return {"deliver_terminal_files": {
+            "callable": self.deliver_files, "_file_delivery": self,
+            "spec": {"name": "deliver_terminal_files",
+                "description": "Deliver only requested final files created or edited through Terminal. Verifies each with display_file and shows a download card. Exclude source/temporary files. Empty paths means no final deliverable.",
+                "parameters": {"type": "object", "properties": {
+                    "paths": {"type": "array", "items": {"type": "string"}, "maxItems": 10}},
+                    "required": ["paths"], "additionalProperties": False}}}}
+
+    def needs_delivery(self):
+        return self.terminal_work and not self.file_cards and not self.delivery_attempted
+
+    async def deliver_files(self, paths):
+        from uuid import uuid4
+        self.delivery_attempted = True
+        if not isinstance(paths, list) or len(paths) > 10 or any(not isinstance(p, str) or not p.strip() for p in paths):
+            return json.dumps({"ok": False, "error": "최종 파일 경로를 최대 10개 지정해 주세요."}, ensure_ascii=False)
+        delivered, errors = [], []
+        for path in dict.fromkeys(paths):
+            call = {"name": "display_file", "call_id": "delivery-" + uuid4().hex,
+                    "arguments": json.dumps({"path": path})}
+            try:
+                await self.execute(call, self.display_tool)
+                if call["call_id"] not in self.displayed_calls:
+                    raise ValueError("파일 표시 결과를 확인할 수 없습니다.")
+                delivered.append(path)
+            except Exception as exc:
+                errors.append({"path": path, "error": type(exc).__name__})
+        if errors:
+            await self.emit({"type": "status", "data": {
+                "description": "일부 최종 파일을 표시하지 못했습니다. 다운로드 완료로 처리하지 마세요.", "done": True}})
+        return json.dumps({"ok": not errors, "delivered": delivered, "errors": errors,
+                           "instruction": "Cards are rendered by the application. Do not call display_file again for the same delivery. Report errors honestly."}, ensure_ascii=False)
 
     def snapshot(self):
         return [*self.output, {
@@ -5730,6 +5804,8 @@ class _TerminalBridge:
                 raw = json.loads(raw)
             except (TypeError, ValueError):
                 pass
+        if terminal_tool and name in {"run_command", "write_file", "replace_file_content"}:
+            self.terminal_work = True
         failed = isinstance(raw, dict) and (
             raw.get("exists") is False or bool(raw.get("error"))
             or raw.get("success") is False or raw.get("ok") is False
@@ -5794,15 +5870,32 @@ class _TerminalBridge:
         text = processed if isinstance(processed, str) else json.dumps(processed, ensure_ascii=False, default=str)
         # UI metadata belongs only in the UI output, never the OpenAI request.
         visualization = name == "render_visualization" and tool.get("type") == "builtin"
+        duplicate_card = False
         if structured is not None or files or embeds or visualization:
-            self.output.extend([
+            card_key = None
+            if name == "display_file" and structured is not None and not failed:
+                import posixpath
+                selector = structured.get("machine_selector") or structured.get("terminal_selector") or tool.get("tool_id")
+                path = structured.get("full_path") or structured.get("path")
+                if selector and path:
+                    card_key = (str(selector), posixpath.normpath(path))
+                    self.displayed_calls.add(call["call_id"])
+            pair = [
                 {"type": "function_call", "id": call.get("id", call["call_id"]),
                  "call_id": call["call_id"], "name": name, "arguments": call["arguments"], "status": "completed"},
                 {"type": "function_call_output", "call_id": call["call_id"],
                  "id": "terminal-result-" + call["call_id"], "status": "completed",
                  "output": [{"type": "input_text", "text": text}],
                  **({"files": files} if files else {}), **({"embeds": embeds} if embeds else {})},
-            ])
+            ]
+            if card_key in self.file_cards:
+                index = self.file_cards[card_key]
+                self.output[index:index + 2] = pair
+                duplicate_card = True
+            else:
+                if card_key is not None:
+                    self.file_cards[card_key] = len(self.output)
+                self.output.extend(pair)
             await self.emit({"type": "chat:completion", "data": {"done": False}})
         handler = (
             _terminal_helper(middleware, "machine_event_handler")
@@ -5813,7 +5906,7 @@ class _TerminalBridge:
         )
         if name == "display_file" and not isinstance(raw, dict):
             event_ok = False
-        if terminal_tool and event_ok:
+        if terminal_tool and event_ok and not duplicate_card:
             if handler:
                 try:
                     await handler(name, args, text, self.emit)
