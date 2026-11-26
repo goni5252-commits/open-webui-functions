@@ -52,6 +52,8 @@ HWPX/XLSX Action은 기존 답변을 파일로 저장합니다. 새 문서·PPT 
 
 PPT 제작 지침은 별도 설치된 PPT Master(`/opt/ppt-master`, 전용 Python `/opt/ppt-master-venv`)를 우선 사용합니다. 기존 하네스가 연결돼 있으면 [presentation/SKILL.md](harness/open-terminal/skills/presentation/SKILL.md)를 갱신하여 연결할 수 있습니다. 이 지침과 하네스 ZIP에 PPT Master 자체는 포함되지 않습니다.
 
+HWP/HWPX → PPT 요청은 기존 kordoc으로 내용을 확인하고 사용자 작업 폴더의 중간 자료를 PPT Master에 전달하도록 공통 AGENTS와 두 스킬을 연결했습니다. 한글 문서 제작은 기존 kordoc 환경을 유지합니다. 두 도구의 실제 설치와 서버에서의 전체 제작 흐름은 별도 확인이 필요합니다.
+
 ## 저장소 구성
 
 - `functions/`: 최신 Python 원본
