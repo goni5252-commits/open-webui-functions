@@ -97,3 +97,42 @@ class FinalFileDeliveryTests(unittest.IsolatedAsyncioTestCase):
         await bridge.deliver_files([])
         self.assertFalse(bridge.needs_delivery())
         self.display.assert_not_awaited()
+
+    async def test_missing_file_preserves_resolved_path_and_reason(self):
+        bridge = self.bridge()
+        bridge.delivery_tools({'display_file': self.tool})
+        self.display.side_effect = lambda path: {'path': '/home/user/wrong.hwpx', 'exists': False}
+        with patch.object(m, '_terminal_helper', return_value=None):
+            result = json.loads(await bridge.deliver_files(['wrong.hwpx']))
+        error = result['errors'][0]
+        self.assertEqual(error['path'], 'wrong.hwpx')
+        self.assertEqual(error['code'], 'file_not_found')
+        self.assertEqual(error['tool_result'], {'path': '/home/user/wrong.hwpx', 'exists': False})
+        self.assertIn('absolute', result['instruction'])
+        self.assertIn('Do not recreate', result['instruction'])
+        self.assertEqual(bridge.output, [])
+
+    async def test_upstream_error_is_preserved_and_corrected_path_can_deliver(self):
+        bridge = self.bridge()
+        bridge.delivery_tools({'display_file': self.tool})
+        self.display.side_effect = [
+            {'error': 'Permission denied', 'status': 'error'},
+            {'path': '/home/user/final.hwpx', 'exists': True}]
+        with patch.object(m, '_terminal_helper', return_value=None):
+            failed = json.loads(await bridge.deliver_files(['/restricted/file.hwpx']))
+            success = json.loads(await bridge.deliver_files(['/home/user/final.hwpx']))
+        self.assertEqual(failed['errors'][0]['code'], 'display_failed')
+        self.assertEqual(failed['errors'][0]['tool_result']['error'], 'Permission denied')
+        self.assertTrue(success['ok'])
+        self.assertEqual(success['delivered'], ['/home/user/final.hwpx'])
+        self.assertEqual(len(bridge.file_cards), 1)
+
+    async def test_transport_exception_retains_actionable_detail(self):
+        bridge = self.bridge()
+        bridge.delivery_tools({'display_file': self.tool})
+        self.display.side_effect = TimeoutError('Terminal timed out')
+        with patch.object(m, '_terminal_helper', return_value=None):
+            result = json.loads(await bridge.deliver_files(['/tmp/final.txt']))
+        self.assertEqual(result['errors'][0]['code'], 'display_exception')
+        self.assertEqual(result['errors'][0]['detail'], 'Terminal timed out')
+        self.assertFalse(result['ok'])

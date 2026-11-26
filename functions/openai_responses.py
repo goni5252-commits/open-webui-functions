@@ -5,7 +5,7 @@ author: originally written by jrkropp, editted by woogon kim
 git_url: https://github.com/jrkropp/open-webui-developer-toolkit/blob/main/functions/pipes/openai_responses_manifold/openai_responses_manifold.py
 description: OpenAI Responses 기반 대화, 자동 모델 선택, 이미지·PDF·OCR 및 Terminal 문서 제작을 지원합니다.
 required_open_webui_version: 0.11.0
-version: 1.9.6
+version: 1.9.7
 license: MIT
 """
 
@@ -5661,7 +5661,8 @@ class _TerminalBridge:
 
     DELIVERY_POLICY = """When the user requests a file to be created or edited, deliver the verified
 final output through deliver_terminal_files before your final answer, even if the user
-never mentions display_file. Supply only final deliverables, not originals, temporary
+never mentions display_file. Wait for background processes to finish and verify the exact
+absolute output paths in Terminal first. Supply only final deliverables, not originals, temporary
 files, scripts or logs. This tool calls Terminal display_file and renders download cards.
 Existing direct display_file calls also deliver files; do not display the same output
 again merely to comply with this policy. Never claim delivery if the tool fails.
@@ -5678,7 +5679,7 @@ For ordinary Terminal inspection with no requested output file, do not deliver f
             "spec": {"name": "deliver_terminal_files",
                 "description": "Deliver only requested final files created or edited through Terminal. Verifies each with display_file and shows a download card. Exclude source/temporary files. Empty paths means no final deliverable.",
                 "parameters": {"type": "object", "properties": {
-                    "paths": {"type": "array", "items": {"type": "string"}, "maxItems": 10}},
+                    "paths": {"type": "array", "description": "Exact absolute paths of final output files, verified with Terminal after all background processes finish. No shell quotes, file:// URLs or guessed paths. Use [] when no final file exists.", "items": {"type": "string"}, "maxItems": 10}},
                     "required": ["paths"], "additionalProperties": False}}}}
 
     def needs_delivery(self):
@@ -5694,17 +5695,32 @@ For ordinary Terminal inspection with no requested output file, do not deliver f
             call = {"name": "display_file", "call_id": "delivery-" + uuid4().hex,
                     "arguments": json.dumps({"path": path})}
             try:
-                await self.execute(call, self.display_tool)
+                result = await self.execute(call, self.display_tool)
                 if call["call_id"] not in self.displayed_calls:
-                    raise ValueError("파일 표시 결과를 확인할 수 없습니다.")
+                    # Preserve the same evidence a direct display_file caller sees.
+                    # In particular, exists=False is a path problem, not a transport exception.
+                    try:
+                        detail = json.loads(result)
+                    except (TypeError, ValueError):
+                        detail = result
+                    code = "file_not_found" if isinstance(detail, dict) and detail.get("exists") is False else "display_failed"
+                    errors.append({"path": path, "code": code, "tool_result": detail})
+                    continue
                 delivered.append(path)
             except Exception as exc:
-                errors.append({"path": path, "error": type(exc).__name__})
+                errors.append({"path": path, "code": "display_exception", "error": type(exc).__name__,
+                               "detail": str(exc)})
         if errors:
             await self.emit({"type": "status", "data": {
                 "description": "일부 최종 파일을 표시하지 못했습니다. 다운로드 완료로 처리하지 마세요.", "done": True}})
         return json.dumps({"ok": not errors, "delivered": delivered, "errors": errors,
-                           "instruction": "Cards are rendered by the application. Do not call display_file again for the same delivery. Report errors honestly."}, ensure_ascii=False)
+                           "instruction": (
+                               "Delivery failed for the paths in errors. Inspect tool_result and its resolved path/exists/error. "
+                               "Check the exact absolute output path with Terminal and confirm background generation has finished. "
+                               "Do not recreate or modify the file merely to retry delivery. Retry only a verified corrected path "
+                               "or after the producing process finishes. Do not claim missing files were created or validated."
+                               if errors else
+                               "Cards are rendered by the application. Do not call display_file again for the same delivery.")}, ensure_ascii=False)
 
     def snapshot(self):
         return [*self.output, {
@@ -5865,8 +5881,10 @@ For ordinary Terminal inspection with no requested output file, do not deliver f
             processed = structured if structured is not None else raw
         if name == "display_file":
             logging.getLogger(__name__).info(
-                "File display diagnostics: terminal=%s raw_type=%s failed=%s structured=%s files=%d embeds=%d",
-                terminal_tool, type(raw).__name__, failed, structured is not None, len(files), len(embeds))
+                "File display diagnostics: terminal=%s raw_type=%s failed=%s structured=%s files=%d embeds=%d exists=%s error_present=%s",
+                terminal_tool, type(raw).__name__, failed, structured is not None, len(files), len(embeds),
+                raw.get("exists") if isinstance(raw, dict) else None,
+                bool(raw.get("error")) if isinstance(raw, dict) else False)
         text = processed if isinstance(processed, str) else json.dumps(processed, ensure_ascii=False, default=str)
         # UI metadata belongs only in the UI output, never the OpenAI request.
         visualization = name == "render_visualization" and tool.get("type") == "builtin"
