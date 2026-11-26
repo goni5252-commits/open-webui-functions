@@ -4,7 +4,7 @@ author: owndev and olivier-lacroix. editied by goni5252
 author_url: https://github.com/owndev/
 project_url: https://github.com/owndev/Open-WebUI-Functions
 funding_url: https://github.com/sponsors/owndev
-version: 1.28.1
+version: 1.29.0
 required_open_webui_version: 0.9.0
 requirements: google-genai==3.3.0
 license: Apache License 2.0
@@ -253,6 +253,12 @@ class Pipe:
             default=True,
             description="첨부 이미지의 문법·문항 검토에서 실행 의도가 없으면 Terminal 도구를 제외합니다. 코드 실행·계산·파일 제작 요청과 다른 종류의 도구는 유지합니다.",
         )
+        NATIVE_TOOL_MAX_ROUNDS: int = Field(
+            default=40, ge=1, le=100,
+            description="SDK 자동 도구 호출의 최대 원격 호출 수. 복잡한 제작은 여러 호출을 사용하며 증가 시 시간·비용도 증가할 수 있습니다."
+        )
+        TOOL_PROGRESS_STATUS: bool = Field(default=True, description="실제 도구 실행 시작·종료·실패와 소요 시간을 표시합니다.")
+        TOOL_DIAGNOSTICS: bool = Field(default=True, description="서버 google_ai.pipe.tools 로그에 요청 ID·도구·단계·시간·오류 유형을 기록합니다. 인자/결과 원문은 기록하지 않습니다.")
         DOCUMENT_WORKFLOW_MODE: Literal["simple", "harness"] = Field(
             default="simple", description="simple: 기존 Terminal 문서 제작 유지. harness: 공통 AGENTS와 catalog의 관련 스킬을 읽도록 안내합니다."
         )
@@ -5233,6 +5239,19 @@ class Pipe:
 
         if tools:
             gen_config_params["tools"] = tools
+        if any(callable(tool) for tool in tools):
+            gen_config_params["automatic_function_calling"] = types.AutomaticFunctionCallingConfig(
+                maximum_remote_calls=self.valves.NATIVE_TOOL_MAX_ROUNDS)
+        if self.valves.TOOL_DIAGNOSTICS:
+            diagnostic_log = logging.getLogger("google_ai.pipe.tools")
+            diagnostic_log.setLevel(logging.INFO)
+            bridge = next((t.get('_terminal_bridge') for t in (__tools__ or {}).values()
+                           if isinstance(t, dict) and t.get('_terminal_bridge')), None)
+            diagnostic_log.info(
+                "Gemini config request=%s model=%s native_tools=%s terminal=%s search=%s max_remote_calls=%s",
+                getattr(bridge, 'trace_id', 'none'), model_id,
+                [getattr(t, '__name__', 'callable') for t in tools if callable(t)],
+                terminal_tool_added, google_search_enabled, self.valves.NATIVE_TOOL_MAX_ROUNDS)
 
         # Gemini 3 built-in + custom tool combinations require tool context
         # circulation. Google explicitly requires:
@@ -5352,7 +5371,7 @@ class Pipe:
         return await client.aio.models.generate_content(model=model_id,
             contents=history + [selected_content, types.Content(role="user", parts=replies)], config=recovery)
 
-    async def _finalize_pending_tools(self, client, model_id, contents, config, response):
+    async def _finalize_pending_tools(self, client, model_id, contents, config, response, emitter=None):
         """One text-only continuation; pending calls are explicitly NOT executed.
 
         SDK AFC may return a final unexecuted call at its round limit. Preserve
@@ -5364,6 +5383,11 @@ class Pipe:
                  if getattr(part, "function_call", None)]
         if not calls or self._get_safety_block_message(response):
             return response
+        await self._emit_optional(emitter, {"type": "status", "data": {
+            "done": True, "hidden": False,
+            "description": "도구 단계가 미완료로 종료됐습니다. 미실행 호출: "
+                + ", ".join(str(call.name) for call in calls)
+                + ". 호출 한도 또는 응답 상태를 서버 로그에서 확인하세요."}})
         history = getattr(response, "automatic_function_calling_history", None) or []
         self.log.warning("Finalizing unresolved tools without execution: names=%s afc_history_entries=%s",
                          [call.name for call in calls], len(history))
@@ -5383,6 +5407,8 @@ class Pipe:
         })
         final_config.system_instruction = (str(config.system_instruction or "") +
             "\n도구 호출 단계가 종료되었습니다. 미실행 호출의 결과를 추측하거나 성공했다고 말하지 마세요. "
+            "서버 권한·설치·무결성 오류를 실제 도구 결과 없이 중단 원인으로 단정하지 마세요. "
+            "요청한 파일이 미완성이면 이를 먼저 밝히고 텍스트 기획안을 완료된 파일의 대체물로 제시하지 마세요. "
             "원래 사용자 질문과 첨부 자료, 이미 얻은 결과에 근거해 최종 답변을 작성하세요. "
             "추가 도구가 꼭 필요하면 확인하지 못한 범위를 명확히 밝히세요. "
             "추가 도구 호출이나 도구 사용 계획을 출력하지 마세요.")
@@ -6310,7 +6336,8 @@ class Pipe:
             bridge = _TerminalBridge(__event_emitter__, {
                 "__metadata__": metadata, "__request__": __request__,
                 "__user__": __user__, "__event_call__": __event_call__,
-            })
+            }, progress=getattr(getattr(self, "valves", None), "TOOL_PROGRESS_STATUS", False),
+                diagnostics=getattr(getattr(self, "valves", None), "TOOL_DIAGNOSTICS", False))
             __tools__ = {
                 name: {**tool, "_terminal_bridge": bridge}
                 if isinstance(tool, dict) else tool
@@ -6321,8 +6348,13 @@ class Pipe:
                 raise ValueError("Reserved tool name: deliver_terminal_files")
             __tools__.update(delivery_tools)
             __event_emitter__ = bridge.emit
-        result = await self._conversation_pipe_impl(body, metadata, __event_emitter__, __tools__,
-                                                     __request__, __user__, holder)
+        try:
+            result = await self._conversation_pipe_impl(body, metadata, __event_emitter__, __tools__,
+                                                         __request__, __user__, holder)
+        finally:
+            if bridge and bridge.diagnostics:
+                bridge.logger.info("Gemini tools request=%s event=pipe_returned tool_calls_so_far=%s",
+                                   bridge.trace_id, bridge.tool_count)
         if holder:
             images = holder[0].drain()
             if images:
@@ -7053,7 +7085,7 @@ class Pipe:
                         response = await self._recover_file_delivery(
                             client, model_id, contents, generation_config, response, delivery_bridge)
                         response = await self._finalize_pending_tools(
-                            client, model_id, contents, generation_config, response)
+                            client, model_id, contents, generation_config, response, __event_emitter__)
                     self.log.debug(f"Request {request_id}: Got non-streaming response")
                     timing["answer_received_s"] = round(time.perf_counter() - request_started_at, 3)
                     nonstream_progress_stop.set()
@@ -7576,8 +7608,16 @@ def _terminal_helper(module, name):
 
 class _TerminalBridge:
     """Request-local renderer bridge for Terminal and ordinary tool embeds."""
-    def __init__(self, emitter, context):
+    def __init__(self, emitter, context, progress=False, diagnostics=False):
         self.emitter = emitter
+        self.progress = progress
+        self.diagnostics = diagnostics
+        self.trace_id = uuid.uuid4().hex[:12]
+        self.tool_count = 0
+        self.logger = logging.getLogger("google_ai.pipe.tools")
+        if diagnostics:
+            self.logger.setLevel(logging.INFO)
+            self.logger.info("Gemini tools request=%s event=connected", self.trace_id)
         self.context = {**context, "__event_emitter__": self.emit}
         self.output = []
         self.text = ""
@@ -7697,7 +7737,76 @@ For ordinary Terminal inspection with no requested output file, do not deliver f
         if self.emitter:
             await self.emitter(event)
 
+    async def _report_tool(self, record):
+        if self.diagnostics:
+            self.logger.info("Gemini tool %s", json.dumps(record, ensure_ascii=False))
+        if self.progress and self.emitter:
+            labels = {"start": "실행 중", "complete": "실행 종료", "failed": "실패", "cancelled": "취소"}
+            description = (f"도구 #{record['sequence']} {record['tool']} · {record['stage']} · "
+                           f"{labels[record['event']]}")
+            if 'elapsed_s' in record:
+                description += f" ({record['elapsed_s']}초)"
+            if 'exit_code' in record:
+                description += f" · 종료 코드 {record['exit_code']}"
+            if 'error_type' in record:
+                description += f" · {record['error_type']}"
+            description += f" · 진단 ID {self.trace_id}"
+            try:
+                await self.emitter({"type": "status", "data": {
+                    "description": description,
+                    "done": record['event'] != 'start', "hidden": False}})
+            except Exception:
+                self.logger.warning("Gemini tool status delivery failed request=%s", self.trace_id)
+
     async def execute(self, call, tool):
+        self.tool_count += 1
+        stage = "도구 작업"
+        try:
+            args = json.loads(call.get('arguments') or '{}')
+            command = str(args.get('command', '')) if isinstance(args, dict) else ''
+        except (ValueError, TypeError):
+            command = ''
+        for marker, label in (("attribution_guard", "PPT Master 무결성 검사"),
+                              ("svg_to_pptx", "PPTX 변환"), ("validate", "결과 검증"),
+                              ("SKILL.md", "제작 지침 읽기"), ("AGENTS.md", "공통 지침 읽기"),
+                              ("harness.py", "하네스 조회"), ("kordoc", "한글 문서 처리")):
+            if marker in command:
+                stage = label
+                break
+        if call.get('name') == 'display_file':
+            stage = "파일 전달"
+        record = {"request": self.trace_id, "sequence": self.tool_count,
+                  "tool": str(call.get('name', 'unknown')), "stage": stage, "event": "start"}
+        started = time.perf_counter()
+        await self._report_tool(record)
+        try:
+            result = await self._execute(call, tool)
+        except BaseException as exc:
+            event = 'cancelled' if isinstance(exc, asyncio.CancelledError) else 'failed'
+            await self._report_tool({**record, "event": event, "error_type": type(exc).__name__,
+                                     "elapsed_s": round(time.perf_counter()-started, 2)})
+            raise
+        payload = result
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except ValueError:
+                pass
+        detail = {}
+        failed = isinstance(payload, str) and payload.lower().startswith('error:')
+        if isinstance(payload, dict):
+            code = payload.get('exit_code', payload.get('returncode'))
+            if isinstance(code, int):
+                detail['exit_code'] = code
+            failed = (payload.get('ok') is False or payload.get('success') is False
+                      or payload.get('exists') is False or bool(payload.get('error'))
+                      or payload.get('status') in ('error', 'failed')
+                      or (isinstance(code, int) and code != 0))
+        await self._report_tool({**record, **detail, "event": 'failed' if failed else 'complete',
+                                 "elapsed_s": round(time.perf_counter()-started, 2)})
+        return result
+
+    async def _execute(self, call, tool):
         import copy
         from uuid import uuid4
         name = call["name"]

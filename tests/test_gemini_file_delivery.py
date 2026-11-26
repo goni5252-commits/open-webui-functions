@@ -17,8 +17,19 @@ class GeminiFileDeliveryTests(unittest.IsolatedAsyncioTestCase):
         trees = []
         for name in ('google_gemini', 'openai_responses'):
             tree = ast.parse((root / 'functions' / (name + '.py')).read_text())
-            trees.append([ast.dump(n) for n in tree.body
-                          if getattr(n, 'name', '') in ('_TerminalBridge', '_is_terminal_tool')])
+            bridge = next(n for n in tree.body if getattr(n, 'name', '') == '_TerminalBridge')
+            # Gemini adds lifecycle instrumentation around the unchanged transport.
+            # Compare delivery/transport methods, not its diagnostic constructor.
+            methods = {}
+            for node in bridge.body:
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    if node.name in ('__init__', '_report_tool') or (name == 'google_gemini' and node.name == 'execute'):
+                        continue
+                    if node.name == '_execute':
+                        node.name = 'execute'
+                    methods[node.name] = ast.dump(node)
+            classifier = next(n for n in tree.body if getattr(n, 'name', '') == '_is_terminal_tool')
+            trees.append((methods, ast.dump(classifier)))
         self.assertEqual(*trees)
 
     async def test_missing_delivery_recovers_without_replaying_creation(self):

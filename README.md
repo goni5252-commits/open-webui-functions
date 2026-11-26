@@ -5,7 +5,7 @@ OpenWebUI에서 대화, 이미지 생성, 한글 OCR과 문서 내보내기를 �
 | 함수 | 버전 | 간단한 설명 | 다운로드 |
 |---|---|---|---|
 | OpenAI Responses | 1.9.8 | 자동 모델 선택, 이미지 생성·편집, PDF/OCR, Terminal 문서 제작 | [JSON](function-openai_responses.json) |
-| Google Gemini | 1.28.1 | Hydrogen·Neon 자동 추론·이미지 생성·한글 OCR·공통 하네스 | [JSON](function-google_gemini.json) |
+| Google Gemini | 1.29.0 | 자동 추론·이미지·OCR·하네스·도구 실행 진단 | [JSON](function-google_gemini.json) |
 | Gemini RAG Bypass | 1.0.1 | 백엔드 RAG 검색을 우회하고 첨부 원본을 Gemini에 전달하는 필터 | [JSON](function-google_gemini_rag_bypass.json) |
 | EXAONE Auto | 1.0.0 | K-EXAONE 2.5 텍스트 대화의 low/high/max 자동 추론 선택 | [JSON](function-exaone_auto.json) |
 | 한글 문서 내보내기 | 3.4.0 | 답변의 표·수식·이미지 등을 HWPX로 저장 | [JSON](function-한글문서_내보내기.json) |
@@ -25,6 +25,7 @@ OpenWebUI에서 대화, 이미지 생성, 한글 OCR과 문서 내보내기를 �
 - 일반 대화: `gemini-4-hydrogen`, `gemini-4-neon`. `AUTO_THINKING=true`이면 요청에 따라 low/medium/high를 로컬 판단하며 xhigh는 high로 제한합니다. 대화별 추론 설정이 우선합니다.
 - 이미지 생성·편집: `ENABLE_CONVERSATION_IMAGES=true`, `CONVERSATION_IMAGE_SMART_SELECTION=true`. 요청에 맞춰 `AUTO_IMAGE_MODEL`(기본 `gemini-3.1-flash-image`)을 호출합니다. 일반 대화에서는 불필요한 이미지 도구를 제외하고 스트리밍을 유지합니다.
 - HWPX 제작: 일반 Gemini 모델에 Open Terminal을 연결하고 native 도구 호출을 사용하세요. Terminal에 설치된 kordoc으로 문서를 생성하고 확인한 뒤 파일 카드로 반환하도록 안내합니다.
+- 도구 진단: `TOOL_PROGRESS_STATUS=True`는 실제 도구별 시작·종료·실패, 작업 단계와 소요 시간을 표시합니다. `TOOL_DIAGNOSTICS=True`는 `google_ai.pipe.tools` 서버 로그에 같은 진단 ID, 제공된 도구 목록, 호출 결과 상태를 기록합니다. 명령·인자·결과 원문은 이 진단 로그에 포함하지 않습니다. 단계명은 실제 호출 명령에서 분류한 요약이며 모델의 내부 추론이 아닙니다. `NATIVE_TOOL_MAX_ROUNDS=40`은 SDK 자동 도구 호출의 원격 호출 한도(1–100)이며 증가 시 시간·비용이 늘 수 있습니다. 미실행 도구가 남으면 화면에 미완료 상태를 표시하고 실행한 것으로 주장하지 않습니다. 서버의 로그 핸들러/수집 설정이 INFO를 버리면 운영 설정도 확인해야 합니다.
 - 공통 하네스: `DOCUMENT_WORKFLOW_MODE=harness`, `ENABLE_TERMINAL_HARNESS=True`, `TERMINAL_HARNESS_ROOT=<실제 설치 경로>`, `TERMINAL_HARNESS_ENTRYPOINT=AGENTS.md`를 설정합니다. 이번 Windows 영구 볼륨 설치 경로는 `/home/harness-ppt-kordoc/openwebui-harness`입니다. 학교 site를 사용하면 `TERMINAL_HARNESS_SITE_ROOT`도 지정합니다. 실제 Terminal 도구가 모델에 제공되는 호출에서 MD/catalog 읽기 명령을 자동 안내하며, 일반 대화는 읽기를 요구하지 않습니다. 기본 `simple`은 기존 동작을 유지합니다. OCR·이미지 생성·백그라운드 작업·검색 전용 호출에는 연결하지 않습니다. Gemini는 별도 locator 도구 대신 기존 Terminal에 읽기 명령을 직접 안내합니다.
 - 한글 OCR: **Gemini 4 Hydrogen / Neon 한글 OCR (High-Res)**: `gemini-4-hydrogen-ocr`, `gemini-4-neon-ocr`. 기본 고해상도·low 추론으로 원문을 전사하며 검색·이미지 생성 도구를 제외합니다. 기존 Flash OCR과 `OCR_*` 설정을 공유합니다.
 - RAG 우회: **Gemini RAG Bypass 필터를 활성화하고 사용할 Gemini 모델에 적용**하세요. 기본 접두사는 `google_gemini`이며 함수 ID를 바꾸었다면 필터의 `MODEL_ID_PREFIXES`도 맞추세요. OCR은 원본 PDF 전달에 실패하면 일부 추출 텍스트로 대체하지 않습니다.
