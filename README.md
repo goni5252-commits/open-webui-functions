@@ -50,6 +50,8 @@ OpenWebUI에서 대화, 이미지 생성, 한글 OCR과 문서 내보내기를 �
 
 HWPX/XLSX Action은 기존 답변을 파일로 저장합니다. 새 문서·PPT 제작에는 별도 Open Terminal 연결이 필요합니다. 고급 문서 작업은 최신 [Open Terminal 하네스 v1.2.0](harness/open-terminal-harness-v1.2.0.zip)과 [설치 안내](harness/open-terminal/INSTALL.md)를 참고하세요.
 
+PPT 제작 지침은 별도 설치된 PPT Master(`/opt/ppt-master`, 전용 Python `/opt/ppt-master-venv`)를 우선 사용합니다. 기존 하네스가 연결돼 있으면 [presentation/SKILL.md](harness/open-terminal/skills/presentation/SKILL.md)를 갱신하여 연결할 수 있습니다. 이 지침과 하네스 ZIP에 PPT Master 자체는 포함되지 않습니다.
+
 ## 저장소 구성
 
 - `functions/`: 최신 Python 원본
