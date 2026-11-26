@@ -2,7 +2,7 @@
   "schema_version": 1,
   "version": "1.2.0",
   "skills": [
-    {"id":"presentation", "description":"PPT Master 우선 PPTX 제작·검증·전달, HWP/HWPX 입력은 kordoc과 연계", "entrypoint":"skills/presentation/SKILL.md", "enabled":true, "needs":["design-md", "ppt-design-adapter", "hwpx"]},
+    {"id":"presentation", "description":"기본 도구로 PPTX 제작·검증·전달, PPT Master는 명시적 요청 시에만 사용, 한글 입력은 kordoc 연계", "entrypoint":"skills/presentation/SKILL.md", "enabled":true, "needs":["design-md", "ppt-design-adapter", "hwpx"]},
     {"id":"design-md", "description":"getdesign.md 또는 첨부 DESIGN.md를 시각 참조로 준비", "entrypoint":"skills/design-md/SKILL.md", "enabled":true},
     {"id":"ppt-design-adapter", "description":"디자인 참조를 PPT 테마와 레이아웃으로 해석", "entrypoint":"skills/ppt-design-adapter/SKILL.md", "enabled":true},
     {"id":"hwpx", "description":"kordoc을 사용한 HWP/HWPX 읽기·양식 채우기·편집·검증", "entrypoint":"skills/hwpx/SKILL.md", "enabled":true},

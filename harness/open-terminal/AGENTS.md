@@ -11,7 +11,7 @@
 ### 한글 문서와 PPT를 함께 다루는 요청
 
 - HWP/HWPX 읽기·작성·편집은 활성 `hwpx` 지침과 기존 kordoc 설치를 사용합니다. PPT 제작은 활성 `presentation` 지침으로 연결합니다. PPT Master 설치가 kordoc을 대체하거나 재설치하는 것은 아닙니다.
-- HWP/HWPX 자료를 PPT로 만드는 요청은 두 entrypoint를 읽습니다. kordoc으로 원본 내용을 확인하여 사용자 workspace에 출처를 보존한 중간 자료를 만들고, presentation 지침에 따라 PPT Master에 전달합니다. 원본 한글 파일을 PPT Master가 직접 읽을 수 있다고 추정하지 않습니다.
+- HWP/HWPX 자료를 PPT로 만드는 요청은 두 entrypoint를 읽습니다. kordoc으로 원본 내용을 확인하여 사용자 workspace에 출처를 보존한 중간 자료를 만들고, presentation 지침의 기본 도구로 PPT를 제작합니다. PPT Master는 현재 작업에 사용자가 사용을 명시한 경우에만 선택하며, 그 외에는 원본 지침을 읽거나 실행하지 않습니다. 원본 한글 파일을 PPT Master가 직접 읽을 수 있다고 추정하지 않습니다.
 - 한글 문서와 PPT를 함께 요청하면 같은 workspace의 확인된 내용을 공통 근거로 사용하되, 두 결과물을 각 형식 도구로 따로 생성·검증·전달합니다. PPT에서 한글 문서로 정리할 때도 텍스트·표 등 확인된 내용을 전달하며 레이아웃의 무손실 변환을 약속하지 않습니다.
 - 항상 병합된 catalog의 활성 entrypoint를 사용하여 학교 site override를 존중합니다. 비활성화되거나 누락된 스킬을 core 파일의 직접 호출로 우회하지 않습니다. 단일 형식 작업에는 다른 제작 도구를 필수 의존성으로 강제하지 않습니다.
 

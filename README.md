@@ -5,7 +5,7 @@ OpenWebUI에서 대화, 이미지 생성, 한글 OCR과 문서 내보내기를 �
 | 함수 | 버전 | 간단한 설명 | 다운로드 |
 |---|---|---|---|
 | OpenAI Responses | 1.9.7 | 자동 모델 선택, 이미지 생성·편집, PDF/OCR, Terminal 문서 제작 | [JSON](function-openai_responses.json) |
-| Google Gemini | 1.28.0 | Hydrogen·Neon 자동 추론·이미지 생성·한글 OCR·공통 하네스 | [JSON](function-google_gemini.json) |
+| Google Gemini | 1.28.1 | Hydrogen·Neon 자동 추론·이미지 생성·한글 OCR·공통 하네스 | [JSON](function-google_gemini.json) |
 | Gemini RAG Bypass | 1.0.1 | 백엔드 RAG 검색을 우회하고 첨부 원본을 Gemini에 전달하는 필터 | [JSON](function-google_gemini_rag_bypass.json) |
 | EXAONE Auto | 1.0.0 | K-EXAONE 2.5 텍스트 대화의 low/high/max 자동 추론 선택 | [JSON](function-exaone_auto.json) |
 | 한글 문서 내보내기 | 3.4.0 | 답변의 표·수식·이미지 등을 HWPX로 저장 | [JSON](function-한글문서_내보내기.json) |
@@ -51,9 +51,9 @@ OpenWebUI에서 대화, 이미지 생성, 한글 OCR과 문서 내보내기를 �
 
 HWPX/XLSX Action은 기존 답변을 파일로 저장합니다. 새 문서·PPT 제작에는 별도 Open Terminal 연결이 필요합니다. 고급 문서 작업은 최신 [Open Terminal 하네스 v1.2.0](harness/open-terminal-harness-v1.2.0.zip)과 [설치 안내](harness/open-terminal/INSTALL.md)를 참고하세요.
 
-PPT 제작 지침은 별도 설치된 PPT Master(`/opt/ppt-master`, 전용 Python `/opt/ppt-master-venv`)를 우선 사용합니다. 기존 하네스가 연결돼 있으면 [presentation/SKILL.md](harness/open-terminal/skills/presentation/SKILL.md)를 갱신하여 연결할 수 있습니다. 이 지침과 하네스 ZIP에 PPT Master 자체는 포함되지 않습니다.
+PPT 제작은 기본 빌더·python-pptx/PptxGenJS를 사용하며, 별도 설치된 PPT Master(`/opt/ppt-master`, 전용 Python `/opt/ppt-master-venv`)는 사용자가 현재 작업에 명시적으로 요청했을 때만 원본 지침을 읽고 사용합니다. 일반 PPT 요청이나 HWP/HWPX → PPT 요청만으로는 선택하지 않습니다. 공통 하네스의 AGENTS/catalog 및 presentation·hwpx 지침을 함께 갱신하고 Gemini는 1.28.1 이상을 적용하세요. 이 지침과 하네스 ZIP에 PPT Master 자체는 포함되지 않습니다.
 
-HWP/HWPX → PPT 요청은 기존 kordoc으로 내용을 확인하고 사용자 작업 폴더의 중간 자료를 PPT Master에 전달하도록 공통 AGENTS와 두 스킬을 연결했습니다. 한글 문서 제작은 기존 kordoc 환경을 유지합니다. 두 도구의 실제 설치와 서버에서의 전체 제작 흐름은 별도 확인이 필요합니다.
+HWP/HWPX → PPT 요청은 기존 kordoc으로 내용을 확인하고 사용자 작업 폴더의 중간 자료를 선택된 PPT 제작 도구에 전달합니다. 한글 문서 제작은 기존 kordoc 환경을 유지합니다. 도구의 실제 설치와 서버에서의 전체 제작 흐름은 별도 확인이 필요합니다. PPT Master 미선택 시 원본 지침의 선행 로딩을 생략하지만 실제 토큰 절감량은 측정하지 않았습니다.
 
 ## 저장소 구성
 
