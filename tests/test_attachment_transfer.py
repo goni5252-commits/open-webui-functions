@@ -21,7 +21,7 @@ async def maybe(value):
     return await value if inspect.isawaitable(value) else value
 ns['_maybe_await'] = maybe
 for node in ast.parse(SOURCE.read_text()).body:
-    if getattr(node, 'name', '') in ('_TerminalAttachmentTransfer', '_is_terminal_tool'):
+    if getattr(node, 'name', '') in ('_TerminalAttachmentTransfer', '_is_terminal_tool', '_terminal_helper'):
         exec(compile(ast.Module(body=[node], type_ignores=[]), str(SOURCE), 'exec'), ns)
 Transfer = ns['_TerminalAttachmentTransfer']
 
@@ -268,4 +268,18 @@ class TransferTests(unittest.IsolatedAsyncioTestCase):
         result=json.loads(await self.t.list_files())
         self.assertEqual({f['file_id'] for f in result['files']},{'new-file','sibling-file'})
 
-if __name__=='__main__': unittest.main()
+
+
+class MachineTransferTests(TransferTests):
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
+        self.t.registry = {'run_command': {'type': 'machine', 'tool_id': 'machine:server-a'}}
+        machine = types.ModuleType('open_webui.routers.machines')
+        machine.proxy_machine = self.proxy
+        patcher = patch.dict(sys.modules, {'open_webui.routers.machines': machine})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+
+if __name__ == '__main__':
+    unittest.main()

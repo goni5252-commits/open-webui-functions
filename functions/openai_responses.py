@@ -5,7 +5,7 @@ author: originally written by jrkropp, editted by woogon kim
 git_url: https://github.com/jrkropp/open-webui-developer-toolkit/blob/main/functions/pipes/openai_responses_manifold/openai_responses_manifold.py
 description: OpenAI Responses 기반 대화, 자동 모델 선택, 이미지·PDF·OCR 및 Terminal 문서 제작을 지원합니다.
 required_open_webui_version: 0.11.0
-version: 1.9.3
+version: 1.9.4
 license: MIT
 """
 
@@ -5428,10 +5428,10 @@ admin/system Terminal and a saved chat; they do not change upload settings.
         return user, records
 
     def _terminal_id(self):
-        ids = {str(t.get("tool_id", ""))[9:] for t in self.registry.values()
+        ids = {str(t.get("tool_id", "")).split(":", 1)[1] for t in self.registry.values()
                if _is_terminal_tool(t) and not t.get("direct")
-               and str(t.get("tool_id", "")).startswith("terminal:")}
-        selected = self.metadata.get("terminal_id")
+               and str(t.get("tool_id", "")).startswith(("machine:", "terminal:"))}
+        selected = self.metadata.get("machine_id", self.metadata.get("terminal_id"))
         if selected in ids:
             return selected
         if len(ids) == 1:
@@ -5441,7 +5441,12 @@ admin/system Terminal and a saved chat; they do not change upload settings.
     async def _proxy(self, user, terminal_id, method, path, query=None, payload=b"", content_type=None, binary=False):
         from urllib.parse import urlencode
         from starlette.requests import Request as ProxyRequest
-        from open_webui.routers.terminals import proxy_terminal
+        proxy_terminal = (
+            _terminal_helper("open_webui.routers.machines", "proxy_machine")
+            or _terminal_helper("open_webui.routers.terminals", "proxy_terminal")
+        )
+        if proxy_terminal is None:
+            raise RuntimeError("No supported Open WebUI machine/terminal proxy is available")
         scope = dict(self.request.scope)
         headers = [(k, v) for k, v in scope.get("headers", []) if k.lower() not in
                    (b"content-type", b"content-length", b"x-session-id")]
@@ -5570,9 +5575,10 @@ admin/system Terminal and a saved chat; they do not change upload settings.
 def _is_terminal_tool(tool):
     """Use OWUI provenance, never a function name shared by Workspace/MCP tools."""
     return bool(
-        tool.get("type") == "terminal"
-        or str(tool.get("tool_id", "")).startswith("terminal:")
+        tool.get("type") in ("machine", "terminal")
+        or str(tool.get("tool_id", "")).startswith(("machine:", "terminal:"))
         or (tool.get("server") or {}).get("is_terminal") is True
+        or (tool.get("server") or {}).get("is_machine") is True
     )
 
 
@@ -5698,7 +5704,10 @@ class _TerminalBridge:
             or raw.get("status") in ("error", "failed")
         )
         structured = None
-        builder = _terminal_helper(middleware, "build_terminal_file_tool_result")
+        builder = (
+            _terminal_helper(middleware, "build_machine_file_tool_result")
+            or _terminal_helper(middleware, "build_terminal_file_tool_result")
+        )
         if terminal_tool and name == "display_file" and isinstance(raw, dict) and not failed:
             if builder:
                 try:
@@ -5709,8 +5718,8 @@ class _TerminalBridge:
                 # Same selector contract as 0.11.4; no invented URL or raw HTTP call.
                 import mimetypes
                 import os
-                terminal_id = metadata.get("terminal_id")
-                if str(tool.get("tool_id", "")).startswith("terminal:"):
+                terminal_id = metadata.get("machine_id", metadata.get("terminal_id"))
+                if str(tool.get("tool_id", "")).startswith(("machine:", "terminal:")):
                     terminal_id = tool["tool_id"].split(":", 1)[1]
                 url = (tool.get("server") or {}).get("url")
                 path = raw.get("path") or args.get("path")
@@ -5718,11 +5727,12 @@ class _TerminalBridge:
                     mime = raw.get("mime_type") or raw.get("content_type") or mimetypes.guess_type(path)[0] or "application/octet-stream"
                     structured = {**raw, "type": "file", "source": "open_terminal",
                         "terminal_selector": terminal_id or url,
+                        "machine_selector": terminal_id or url,
                         "session_id": metadata.get("chat_id"), "path": path,
                         "full_path": raw.get("full_path") or path,
                         "name": raw.get("name") or os.path.basename(path),
                         "mime_type": mime, "content_type": mime,
-                        **({"terminal_id": terminal_id} if terminal_id else {"terminal_url": url}),
+                        **({"terminal_id": terminal_id, "machine_id": terminal_id} if terminal_id else {"terminal_url": url, "machine_url": url}),
                         **({"displayed": True} if args.get("inline") is True else {}),
                         **({"page": args["page"]} if args.get("page") else {}),
                     }
@@ -5757,7 +5767,10 @@ class _TerminalBridge:
                  **({"files": files} if files else {}), **({"embeds": embeds} if embeds else {})},
             ])
             await self.emit({"type": "chat:completion", "data": {"done": False}})
-        handler = _terminal_helper(middleware, "terminal_event_handler")
+        handler = (
+            _terminal_helper(middleware, "machine_event_handler")
+            or _terminal_helper(middleware, "terminal_event_handler")
+        )
         event_ok = not failed and not (
             isinstance(raw, str) and raw.lstrip().lower().startswith(("error", "exception", "traceback"))
         )
@@ -5771,12 +5784,16 @@ class _TerminalBridge:
                     # A UI failure must not cause a successful tool to execute again.
                     pass
             else:
+                event_prefix = "machine:" if (
+                    "machine_id" in metadata
+                    or str(tool.get("tool_id", "")).startswith("machine:")
+                ) else "terminal:"
                 path = (raw.get("path") if isinstance(raw, dict) else None) or args.get("path")
                 if name == "run_command":
-                    await self.emit({"type": "terminal:run_command", "data": {}})
+                    await self.emit({"type": event_prefix + "run_command", "data": {}})
                 elif path and name in ("display_file", "write_file", "replace_file_content"):
                     if name != "display_file" or args.get("inline") is not True:
-                        await self.emit({"type": "terminal:" + name, "data": {
+                        await self.emit({"type": event_prefix + name, "data": {
                             "path": path, **({"page": args["page"]} if args.get("page") else {}),
                         }})
         return text

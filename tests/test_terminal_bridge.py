@@ -51,3 +51,21 @@ class TerminalBridgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(json.loads(result)['exists'])
         self.assertEqual(bridge.output, [])
         self.assertEqual(events, [])
+
+
+class MachineBridgeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_machine_file_card_and_refresh(self):
+        events = []
+        async def emit(event):
+            events.append(event)
+        async def display_file(path):
+            return {'path': path, 'exists': True}
+        bridge = m._TerminalBridge(emit, {'__metadata__': {'chat_id': 'chat', 'machine_id': 'test'}})
+        with patch.object(m, '_terminal_helper', return_value=None):
+            result = await bridge.execute(
+                {'name': 'display_file', 'arguments': '{"path":"/tmp/report.txt"}', 'call_id': 'machine-call'},
+                {'type': 'machine', 'tool_id': 'machine:test', 'callable': display_file})
+        card = json.loads(result)
+        self.assertEqual(card['machine_id'], 'test')
+        self.assertEqual(card['machine_selector'], 'test')
+        self.assertTrue(any(e['type'] == 'machine:display_file' for e in events))
